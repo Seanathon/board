@@ -117,6 +117,40 @@ test("collectionChrome keeps viewToggle true for any collection", () => {
   assert.equal(collectionChrome(COLLECTIONS[1]).viewToggle, true);
 });
 
+// --- composed boards get descriptor-driven filters, not Inspiration's fixed chrome ---
+
+const WISH_LIST = {
+  id: "wish-list-sblv", name: "Wish List", type: "inspiration", view: "grid",
+  descriptor: {
+    fields: [
+      { key: "brand", label: "Brand", type: "text" },
+      { key: "category", label: "Category", type: "tags" },
+      { key: "want_level", label: "Want level", type: "enum", values: ["Nice to have", "Must have"] },
+      { key: "verdict", label: "Verdict", type: "enum", values: ["Watching", "Bought"] },
+    ],
+  },
+};
+
+test("collectionChrome: a composed grid board does NOT inherit Inspiration's fixed facets", () => {
+  // It carries type 'inspiration' for card layout, but the fixed Audience/Form/Domain +
+  // tier + design tag cloud belong to the SEEDED Inspiration board (matched by id). The
+  // composed board's filters come from buildFilters(descriptor) instead (the UI wires it).
+  const chrome = collectionChrome(WISH_LIST);
+  assert.equal(chrome.facets, false, "no fixed Audience/Form/Domain");
+  assert.equal(chrome.tiers, false, "no design tiers");
+  assert.equal(chrome.tagCloud, false, "no fixed design tag cloud");
+  assert.equal(chrome.screenshot, true, "still a grid board → cards show images");
+});
+
+test("buildFilters drives the composed board's filters (enum dropdowns + tags cloud)", () => {
+  const filters = buildFilters(WISH_LIST.descriptor);
+  assert.deepEqual(
+    filters.map((f: { key: string; type: string }) => `${f.key}:${f.type}`),
+    ["category:tags", "want_level:enum", "verdict:enum"],
+    "enum + tags fields become filters; text fields don't",
+  );
+});
+
 // --- Library view helpers ---
 
 const LIBRARY_ITEM = {

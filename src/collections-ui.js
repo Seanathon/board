@@ -313,7 +313,11 @@ export function shouldShowEnableAiNudge(opts = {}) {
 }
 
 export function collectionChrome(collection) {
-  const isInspiration = collection.type === "inspiration";
+  // The FIXED Inspiration controls (Audience/Form/Domain + tiers + design tags) belong
+  // to the SEEDED Inspiration board only — a composed grid board inherits type
+  // "inspiration" for card layout but must NOT show them (they'd be empty/irrelevant).
+  // Match by id; composed boards get descriptor-driven filters (buildFilters) instead.
+  const isInspiration = collection.id === "inspiration";
   const isGrid = collection.view === "grid";
   return {
     facets: isInspiration,

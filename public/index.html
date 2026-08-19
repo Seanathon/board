@@ -1476,6 +1476,8 @@
         <option value="repo">Repo</option>
         <option value="video">Video</option>
       </select>
+      <!-- Composed boards: enum-field dropdowns rendered here from the descriptor. -->
+      <div id="descriptor-facets" style="display:none;gap:10px"></div>
       <button class="clear-filters-btn" id="clear-filters-btn">× Clear</button>
     </div>
     <div class="header-right">
@@ -1573,6 +1575,10 @@
   let activeTiers = new Set();
   let activeTag = null;
   let showFavoritesOnly = false;
+  // Composed-board filters (descriptor-driven): enum-field selections + which tags
+  // field feeds the tag cloud. Reset on board switch.
+  let descriptorFacetState = {};
+  let activeTagField = null;
   let currentBookmark = null;
   let analysisAgent = 'claude';
   // null = unknown until /api/meta resolves; then boolean. Drives the add button label
@@ -2120,6 +2126,7 @@ LLM_API_KEY=sk-…</pre>
     libraryTypeFilter = '';
     const libTypeEl = document.getElementById('library-type-filter');
     if (libTypeEl) libTypeEl.value = '';
+    descriptorFacetState = {}; // composed-board enum selections don't carry across boards
 
     const itemsRes = await fetch(helpers.itemsUrl(cid));
     bookmarks = await itemsRes.json();
@@ -2150,13 +2157,17 @@ LLM_API_KEY=sk-…</pre>
     const tagCloud = document.getElementById('tag-cloud');
     if (tagCloud) tagCloud.style.display = chrome.tagCloud ? '' : 'none';
 
-    // Library-specific controls
-    const isLibrary = col.type === 'library';
+    // Library-specific controls — only the SEEDED list boards (a composed board can
+    // inherit type 'library' but gets descriptor-driven facets instead, below).
+    const isLibrary = col.id === 'library' || col.id === 'inbox';
     const libTypeFilter = document.getElementById('library-type-filter');
     if (libTypeFilter) libTypeFilter.style.display = isLibrary ? '' : 'none';
     const libTopicCloud = document.getElementById('library-topic-cloud');
     if (libTopicCloud) libTopicCloud.style.display = isLibrary ? '' : 'none';
     if (isLibrary) renderLibraryTopicCloud();
+
+    // Composed boards: render enum-field dropdowns + a tag cloud from the descriptor.
+    renderDescriptorFacets(col);
 
     // Apply collection's default view
     const newView = col.view || 'grid';
@@ -2212,6 +2223,65 @@ LLM_API_KEY=sk-…</pre>
     else cloud.style.display = '';
   }
 
+  // Composed boards: render enum-field dropdowns from the descriptor into the filter bar,
+  // and (when the board has a tags field) feed the tag cloud from it. Seeded boards skip
+  // this — chrome.descriptorSelects/TagFields are empty for them.
+  function renderDescriptorFacets(col) {
+    const container = document.getElementById('descriptor-facets');
+    const helpers = window.collectionHelpers;
+    // Composed boards (not the seeded ones) derive their filters from the descriptor via
+    // buildFilters (Story 8.2): enum fields → dropdowns, the tags field → the tag cloud.
+    const isCustom = !!col && !['inspiration', 'library', 'inbox'].includes(col.id);
+    const filters = isCustom ? helpers.buildFilters(col.descriptor) : [];
+    const selects = filters.filter(f => f.type === 'enum');
+    const tagFilter = filters.find(f => f.type === 'tags');
+
+    // Drop any stale selections whose field isn't on this board.
+    const validKeys = new Set(selects.map(f => f.key));
+    for (const k of Object.keys(descriptorFacetState)) if (!validKeys.has(k)) delete descriptorFacetState[k];
+
+    if (!selects.length) {
+      container.style.display = 'none';
+      container.innerHTML = '';
+    } else {
+      container.style.display = 'flex';
+      container.innerHTML = selects.map(f =>
+        `<select class="filter-select" data-facet-key="${esc(f.key)}">` +
+        `<option value="">${esc(f.label)}</option>` +
+        (f.values || []).map(v => `<option value="${esc(v)}"${descriptorFacetState[f.key] === v ? ' selected' : ''}>${esc(v)}</option>`).join('') +
+        `</select>`
+      ).join('');
+      container.querySelectorAll('select[data-facet-key]').forEach(sel => {
+        sel.classList.toggle('active', !!sel.value);
+        sel.addEventListener('change', () => {
+          const key = sel.dataset.facetKey;
+          if (sel.value) descriptorFacetState[key] = sel.value; else delete descriptorFacetState[key];
+          applyFilters();
+        });
+      });
+    }
+
+    activeTagField = tagFilter ? tagFilter.key : null; // one tag cloud; the tags field drives it
+    if (activeTagField) renderDescriptorTagCloud();
+  }
+
+  function renderDescriptorTagCloud() {
+    const cloud = document.getElementById('tag-cloud');
+    if (!cloud || !activeTagField) return;
+    const counts = {};
+    bookmarks.forEach(b => { const t = window.collectionHelpers.getFieldValue(b, activeTagField); if (Array.isArray(t)) t.forEach(x => { counts[x] = (counts[x] || 0) + 1; }); });
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 30);
+    cloud.innerHTML = '';
+    sorted.forEach(([tag]) => {
+      const chip = document.createElement('button');
+      chip.className = 'tag-chip' + (activeTag === tag ? ' active' : '');
+      chip.textContent = tag;
+      chip.onclick = () => { activeTag = activeTag === tag ? null : tag; renderDescriptorTagCloud(); applyFilters(); };
+      cloud.appendChild(chip);
+    });
+    cloud.style.display = sorted.length ? '' : 'none';
+  }
+
   function applyFilters() {
     const searchEl = document.getElementById('search');
     const audienceEl = document.getElementById('audience-filter');
@@ -2226,10 +2296,33 @@ LLM_API_KEY=sk-…</pre>
     formEl.classList.toggle('active', !!form);
     domainEl.classList.toggle('active', !!domain);
 
-    const anyActive = !!(q || audience || form || domain || activeTiers.size || showFavoritesOnly || activeTag || libraryTopicFilter || libraryTypeFilter);
+    const facetActive = Object.values(descriptorFacetState).some(Boolean);
+    const anyActive = !!(q || audience || form || domain || activeTiers.size || showFavoritesOnly || activeTag || libraryTopicFilter || libraryTypeFilter || facetActive);
     document.getElementById('clear-filters-btn').classList.toggle('visible', anyActive);
 
-    if (activeCollection !== 'inspiration') {
+    const activeColObj = collections.find(c => c.id === activeCollection);
+    const isCustomBoard = !!activeColObj && !['inspiration', 'library', 'inbox'].includes(activeColObj.id);
+
+    if (isCustomBoard) {
+      // Composed board: filter via the descriptor-driven predicate (Story 8.2's
+      // matchesFilters — enum equality, tags includes, shape-bridged via getFieldValue),
+      // fed the active enum selections + the active tag. Plus a generic text search.
+      const activeFilters = { ...descriptorFacetState };
+      if (activeTag && activeTagField) activeFilters[activeTagField] = activeTag;
+      const descriptor = activeColObj.descriptor;
+      filtered = bookmarks.filter(b => {
+        if (!window.collectionHelpers.matchesFilters(b, activeFilters, descriptor)) return false;
+        if (q) {
+          const parts = [b.title, b.url];
+          for (const v of Object.values(b)) {
+            if (typeof v === 'string') parts.push(v);
+            else if (Array.isArray(v)) parts.push(...v.filter(x => typeof x === 'string'));
+          }
+          if (!parts.filter(Boolean).join(' ').toLowerCase().includes(q)) return false;
+        }
+        return true;
+      });
+    } else if (activeCollection !== 'inspiration') {
       filtered = bookmarks.filter(b =>
         window.collectionHelpers.matchesLibraryFilters(b, { q, topic: libraryTopicFilter, type: libraryTypeFilter })
       );
@@ -3257,7 +3350,10 @@ LLM_API_KEY=sk-…</pre>
     libraryTypeFilter = '';
     const libTypeEl = document.getElementById('library-type-filter');
     if (libTypeEl) libTypeEl.value = '';
+    descriptorFacetState = {};
+    document.querySelectorAll('#descriptor-facets select[data-facet-key]').forEach(s => { s.value = ''; s.classList.remove('active'); });
     if (activeCollection === 'inspiration') buildTagCloud();
+    else if (activeTagField) renderDescriptorTagCloud();
     else renderLibraryTopicCloud();
     applyFilters();
   });
