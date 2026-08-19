@@ -847,6 +847,60 @@
       .empty-cta { transition: none; }
     }
 
+    /* ── Data / config affordance ──
+       A single always-available way back to the guide, and to the two operations that
+       have no other home: getting the collection out, and putting it back. Kept small
+       and low-contrast because the board is the hero — this is a door, not a feature. */
+    .data-fab {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      z-index: 45;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-3);
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s, transform 0.15s;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+    }
+    .data-fab:hover { color: var(--text); border-color: var(--border-hover); transform: translateY(-1px); }
+    .data-fab svg { width: 16px; height: 16px; }
+    /* The AI nudge shares this corner; stack it above rather than under the button. */
+    #ai-nudge { bottom: 64px !important; }
+
+    /* ── Data panel ── */
+    .data-block { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); }
+    .data-block:first-child { margin-top: 8px; padding-top: 0; border-top: none; }
+    .data-block h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--text); }
+    .data-block p { margin: 0 0 12px; font-size: 13px; line-height: 1.55; color: var(--text-2); }
+    .data-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .data-note { font-size: 12px; color: var(--text-3); line-height: 1.5; }
+    .data-file { font-size: 12px; color: var(--text-2); }
+
+    /* The one destructive path in the app. It stays visually quiet until armed, then
+       states the consequence in plain words and demands a typed confirmation — a
+       checkbox alone is too easy to tick past. */
+    .danger-arm { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--text-2); }
+    .danger-arm input { margin-top: 3px; flex: none; }
+    .danger-zone {
+      margin-top: 12px;
+      padding: 14px 16px;
+      border: 1px solid rgba(248, 113, 113, 0.35);
+      border-radius: var(--radius-sm);
+      background: rgba(248, 113, 113, 0.06);
+    }
+    .danger-zone h5 { margin: 0 0 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #f87171; }
+    .danger-zone p { margin: 0 0 10px; font-size: 13px; color: var(--text-2); }
+    .danger-zone input[type="text"] { width: 160px; }
+    .btn-danger { background: #b91c1c; color: #fff; border: none; }
+    .btn-danger:disabled { background: var(--surface-2); color: var(--text-3); cursor: default; }
+
     /* ── Welcome / "where to begin" guide (opened from the empty state) ── */
     .modal.modal--welcome { max-width: 600px; }
     .welcome { padding: 36px 40px 30px; }
@@ -1473,6 +1527,15 @@
       transition: border-color 0.15s;
     }
     textarea.reflection-input { resize: vertical; min-height: 60px; }
+    /* Must sit AFTER textarea.reflection-input: same specificity, so source order is
+       what decides. Placed earlier it lost, and the editor collapsed to the two-row
+       box this exists to replace. */
+    textarea.prompt-editor {
+      min-height: 260px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
     select.reflection-input {
       cursor: pointer;
       appearance: none;
@@ -2112,7 +2175,7 @@ LLM_API_KEY=sk-…</pre>
         </div>
 
         <div class="field-label" style="margin-top:12px">Enrichment prompt (the AI lens for this board)</div>
-        <textarea id="edit-board-prompt" class="reflection-input" rows="2" placeholder="How should the AI analyze each item?">${esc(d.enrichment_prompt || '')}</textarea>
+        <textarea id="edit-board-prompt" class="reflection-input" rows="8" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;resize:vertical" placeholder="How should the AI analyze each item?">${esc(d.enrichment_prompt || '')}</textarea>
 
         <div class="field-label" style="margin-top:16px">Fields <span style="color:var(--text-3);font-weight:400">— check AI to let enrichment fill it; description guides the AI</span></div>
         <div id="board-fields-container">
@@ -3626,6 +3689,27 @@ LLM_API_KEY=sk-…</pre>
     if (e.target.closest('[data-welcome-close]')) { closeModal(); return; }
   });
 
+  /**
+   * The one always-available door to the guide and to import/export. The welcome modal
+   * was reachable only from an empty board, which meant that once you had items — the
+   * exact point at which a backup starts to matter — there was no way back to it.
+   */
+  function mountDataFab() {
+    if (document.querySelector('.data-fab')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'data-fab';
+    btn.id = 'data-fab';
+    btn.title = 'Guide, backup and settings';
+    btn.setAttribute('aria-label', 'Guide, backup and settings');
+    btn.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">'
+      + '<path d="M2 4.2c0-.9 2.7-1.7 6-1.7s6 .8 6 1.7-2.7 1.7-6 1.7-6-.8-6-1.7Z"/>'
+      + '<path d="M2 4.2v7.6c0 .9 2.7 1.7 6 1.7s6-.8 6-1.7V4.2"/>'
+      + '<path d="M2 8c0 .9 2.7 1.7 6 1.7s6-.8 6-1.7"/></svg>';
+    btn.addEventListener('click', openWelcomeModal);
+    document.body.appendChild(btn);
+  }
+
   function prefersReducedMotion() {
     return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }
@@ -3648,13 +3732,175 @@ LLM_API_KEY=sk-…</pre>
 
   // The "Where to begin" guide: a short letter from the author + three first steps +
   // a link to the docs. Opened from the empty state's secondary affordance.
+  /** Tabs inside the welcome modal reuse the item modal's tab vocabulary. */
+  function wireWelcomeTabs() {
+    const root = document.getElementById('modal-content');
+    root.querySelectorAll('.modal-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.panel;
+        root.querySelectorAll('.modal-tab').forEach(t => {
+          const on = t === tab;
+          t.classList.toggle('active', on);
+          t.setAttribute('aria-selected', String(on));
+        });
+        root.querySelectorAll('.modal-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === target));
+      });
+    });
+  }
+
+  /** Trigger a browser download of the streamed tar without buffering it in JS. */
+  function downloadBackup() {
+    // A plain navigation lets the browser stream ~100MB straight to disk; fetching it
+    // into a Blob first would hold the whole archive in memory for no reason.
+    const a = document.createElement('a');
+    a.href = '/api/backup';
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function wireDataPanel() {
+    const exportBtn = document.getElementById('data-export');
+    const exportNote = document.getElementById('data-export-note');
+    const fileInput = document.getElementById('data-import-file');
+    const importBtn = document.getElementById('data-import');
+    const importNote = document.getElementById('data-import-note');
+    const fresh = document.getElementById('data-fresh');
+    const danger = document.getElementById('data-danger');
+    const confirmBox = document.getElementById('data-confirm');
+    const wipeBtn = document.getElementById('data-wipe-restore');
+    if (!exportBtn) return;
+
+    exportNote.textContent = `${bookmarks.length} items on this board · every board is included`;
+
+    exportBtn.addEventListener('click', () => {
+      downloadBackup();
+      exportNote.textContent = 'Downloading…';
+      setTimeout(() => { exportNote.textContent = 'Saved to your downloads.'; }, 1500);
+    });
+
+    fileInput.addEventListener('change', () => {
+      const f = fileInput.files && fileInput.files[0];
+      importBtn.disabled = !f;
+      importNote.textContent = f ? `${f.name} · ${(f.size / 1048576).toFixed(1)} MB` : '';
+      updateWipeArm();
+    });
+
+    // Arming is two steps on purpose: the checkbox reveals the consequence, and the
+    // typed word confirms it. A checkbox alone is one stray click from data loss.
+    fresh.addEventListener('change', () => {
+      danger.hidden = !fresh.checked;
+      importBtn.disabled = fresh.checked || !(fileInput.files && fileInput.files[0]);
+      updateWipeArm();
+    });
+    confirmBox.addEventListener('input', updateWipeArm);
+
+    function updateWipeArm() {
+      const hasFile = !!(fileInput.files && fileInput.files[0]);
+      wipeBtn.disabled = !(fresh.checked && hasFile && confirmBox.value.trim().toLowerCase() === 'delete');
+    }
+
+    importBtn.addEventListener('click', () => runRestore({ wipeFirst: false }));
+    wipeBtn.addEventListener('click', () => runRestore({ wipeFirst: true }));
+
+    async function runRestore({ wipeFirst }) {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      importBtn.disabled = true;
+      wipeBtn.disabled = true;
+
+      try {
+        if (wipeFirst) {
+          // The backup is not a courtesy: it is the only undo this action has, so it
+          // happens before anything is deleted.
+          importNote.textContent = 'Downloading a backup first…';
+          downloadBackup();
+          await new Promise(r => setTimeout(r, 2500));
+          importNote.textContent = 'Deleting current items…';
+          const wipe = await fetch('/skills/wipe-items', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirm: 'delete' }),
+          });
+          if (!wipe.ok) throw new Error('could not clear the collection');
+        }
+
+        importNote.textContent = 'Restoring…';
+        const res = await fetch('/api/backup', {
+          method: 'POST', headers: { 'Content-Type': 'application/x-tar' }, body: file,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'restore failed');
+
+        importNote.textContent =
+          `Restored ${data.itemsCreated} items and ${data.filesRestored} images`
+          + (data.boardsCreated ? `, ${data.boardsCreated} boards` : '')
+          + (data.itemsSkipped ? ` · ${data.itemsSkipped} already here, left alone` : '')
+          + '.';
+        await load();
+      } catch (err) {
+        importNote.textContent = `Could not restore: ${err.message}`;
+      } finally {
+        importBtn.disabled = !(fileInput.files && fileInput.files[0]) || fresh.checked;
+        updateWipeArm();
+      }
+    }
+  }
+
+  async function wireSystemPanel() {
+    const box = document.getElementById('system-prompt');
+    const note = document.getElementById('system-prompt-note');
+    const saveBtn = document.getElementById('system-prompt-save');
+    const resetBtn = document.getElementById('system-prompt-reset');
+    if (!box) return;
+
+    let builtInDefault = '';
+    try {
+      const data = await fetch('/api/settings').then(r => r.json());
+      builtInDefault = data.defaults['inspiration.system_prompt'] || '';
+      box.value = data.settings['inspiration.system_prompt'] || '';
+      // Showing the default as placeholder keeps "empty" and "default" distinguishable.
+      box.placeholder = builtInDefault;
+    } catch {
+      note.textContent = 'Could not load settings.';
+      return;
+    }
+
+    saveBtn.addEventListener('click', async () => {
+      note.textContent = 'Saving…';
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings: { 'inspiration.system_prompt': box.value } }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'save failed');
+        note.textContent = box.value.trim() ? 'Saved. It applies to the next capture.' : 'Cleared — the built-in lens is back.';
+      } catch (err) {
+        note.textContent = `Could not save: ${err.message}`;
+      }
+    });
+
+    resetBtn.addEventListener('click', () => {
+      box.value = '';
+      note.textContent = 'Cleared. Save to confirm.';
+      box.focus();
+    });
+  }
+
   function openWelcomeModal() {
     showModalContent(`
       <div class="welcome">
         <p class="welcome-eyebrow">Welcome to board</p>
         <h2 class="welcome-title">A collection with a point of view.</h2>
 
-        <div class="welcome-section">
+        <div class="modal-tabs" role="tablist" style="margin-top:22px">
+          <button class="modal-tab active" data-panel="start" role="tab" aria-selected="true">Getting started</button>
+          <button class="modal-tab" data-panel="data" role="tab" aria-selected="false">Your data</button>
+          <button class="modal-tab" data-panel="system" role="tab" aria-selected="false">System</button>
+        </div>
+
+        <div class="modal-panel active" data-panel="start" role="tabpanel">
+        <div class="welcome-section" style="margin-top:6px;padding-top:0;border-top:none">
           <h3>Where to begin</h3>
           <ol class="welcome-steps">
             <li><b>Capture.</b> Paste a URL above, or share to your Inbox from your phone. It lands in the Inbox first.</li>
@@ -3682,6 +3928,56 @@ LLM_API_KEY=sk-…</pre>
           <p>I found it genuinely useful. I hope you do too.</p>
           <p class="welcome-sign">Sean, the original creator of Board.</p>
         </div>
+        </div><!-- /start panel -->
+
+        <div class="modal-panel" data-panel="data" role="tabpanel">
+          <div class="data-block">
+            <h4>Take it with you</h4>
+            <p>Everything on every board, plus the images, as one plain <code>.tar</code> file. It opens with ordinary tools, so you can look inside without this app.</p>
+            <div class="data-row">
+              <button type="button" class="btn btn-primary" id="data-export">Download a backup</button>
+              <span class="data-note" id="data-export-note"></span>
+            </div>
+          </div>
+
+          <div class="data-block">
+            <h4>Bring it back</h4>
+            <p>Restore a backup, on this machine or a new one. Anything already here is left untouched: boards keep their own fields, and items you already have are skipped rather than rewritten.</p>
+            <div class="data-row">
+              <input type="file" id="data-import-file" accept=".tar,application/x-tar" class="data-file">
+              <button type="button" class="btn btn-ghost" id="data-import" disabled>Restore</button>
+            </div>
+            <div class="data-note" id="data-import-note" style="margin-top:10px"></div>
+
+            <label class="danger-arm">
+              <input type="checkbox" id="data-fresh">
+              <span>Start from a fresh state — delete what is here first, so the backup is all that remains.</span>
+            </label>
+
+            <div class="danger-zone" id="data-danger" hidden>
+              <h5>This deletes your items</h5>
+              <p id="data-danger-copy">Every item and every image goes. Your boards and the fields you built stay. A backup downloads first.</p>
+              <div class="data-row">
+                <input type="text" id="data-confirm" class="reflection-input" placeholder="type delete" autocomplete="off" spellcheck="false">
+                <button type="button" class="btn btn-danger" id="data-wipe-restore" disabled>Delete and restore</button>
+              </div>
+            </div>
+          </div>
+        </div><!-- /data panel -->
+
+        <div class="modal-panel" data-panel="system" role="tabpanel">
+          <div class="data-block">
+            <h4>The analysis lens</h4>
+            <p>What the AI is told before it looks at anything you save. Rewrite it to match what you actually collect. Leave it empty to use the built-in one.</p>
+            <textarea id="system-prompt" class="reflection-input prompt-editor" spellcheck="false" placeholder="Loading…"></textarea>
+            <div class="data-row" style="margin-top:10px">
+              <button type="button" class="btn btn-primary" id="system-prompt-save">Save</button>
+              <button type="button" class="btn btn-ghost" id="system-prompt-reset">Restore the default</button>
+              <span class="data-note" id="system-prompt-note"></span>
+            </div>
+            <p class="data-note" style="margin-top:14px">Each board also has its own enrichment prompt, in that board's ⚙ editor. This one is the global fallback for capture.</p>
+          </div>
+        </div><!-- /system panel -->
 
         <div class="welcome-footer">
           <a class="empty-cta" href="https://github.com/Hayawan/board" target="_blank" rel="noopener">Read the docs on GitHub</a>
@@ -3689,6 +3985,9 @@ LLM_API_KEY=sk-…</pre>
         </div>
       </div>
     `);
+    wireWelcomeTabs();
+    wireDataPanel();
+    wireSystemPanel();
     document.getElementById('modal').classList.add('modal--welcome');
   }
 
@@ -3702,6 +4001,7 @@ LLM_API_KEY=sk-…</pre>
   // descriptor-driven card/modal when the UI consumes the SQLite item model).
   import { renderField, renderFields, renderAsset, isSafeUrl } from './descriptor/render-map.js';
   window.renderHelpers = { renderField, renderFields, renderAsset, isSafeUrl };
+  mountDataFab();
   load();
 </script>
 </body>
