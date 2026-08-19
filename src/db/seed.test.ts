@@ -99,6 +99,13 @@ describe('seeded descriptor field contracts (Story 1.2)', () => {
 
     // reflection fields are text
     assert.equal(field(d, 'reflection.five_second_message').type, 'text');
+    assert.equal(field(d, 'reflection.apply_to_your_work').type, 'text');
+
+    // A fresh install must not be seeded with traces of the author's own project.
+    // The board ships to strangers; a field called "Apply to <someone's product>"
+    // is dead weight to every one of them.
+    const serialized = JSON.stringify(INSPIRATION_DESCRIPTOR).toLowerCase();
+    assert.ok(!serialized.includes('naruki'), 'seeded descriptor must not name a personal project');
 
     // favorite_reason is a non-system user field → enrichable:false
     assert.equal(field(d, 'favorite_reason').enrichable, false);
