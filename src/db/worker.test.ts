@@ -44,29 +44,51 @@ describe('job worker (Story 5.1)', () => {
     assert.equal(max, 1);
   });
 
-  // AC 4/5 — no double serializer: a raw enqueueWrite and a job-write share one worker
-  it('serializes a raw enqueueWrite against a job (combined active-count never > 1)', async () => {
-    let active = 0;
-    let max = 0;
-    const dw = deferred();
+  // Interactive writes must NOT queue behind a job. A capture job holds its lane for
+  // its whole duration (Chrome + LLM, up to CAPTURE_TIMEOUT_MS = 180s); when writes
+  // shared that lane, `addItemSkill`'s one-row INSERT — and so POST /api/collections/
+  // :cid/items — blocked for the length of the running capture (measured: 42s with a
+  // single job in flight). Concurrency 1 for JOBS (NFR-1: two Chromiums OOM the LXC)
+  // and single-writer for SQLITE are two different constraints; they now have two
+  // lanes. See the AD6 revision in queue.ts.
+  it('does not queue a raw enqueueWrite behind a running job', async () => {
     const dj = deferred();
-    const pw = enqueueWrite(async () => {
-      active += 1;
-      max = Math.max(max, active);
-      await dw.promise;
-      active -= 1;
-    });
     const pj = enqueueJob(
-      { type: 't', timeoutMs: 60_000, run: async () => { active += 1; max = Math.max(max, active); await dj.promise; active -= 1; } },
+      { type: 't', timeoutMs: 60_000, run: async () => { await dj.promise; } },
       { timeoutFn: neverFires },
     );
+    await tick(); // the job is now running and holding its lane
+
+    let wrote = false;
+    const pw = enqueueWrite(() => { wrote = true; });
     await tick();
-    assert.equal(active, 1, 'a job and a raw write must not overlap');
-    dw.resolve();
+    assert.equal(wrote, true, 'a write must not wait for a long-running job to finish');
+
     await pw;
     dj.resolve();
     await pj;
-    assert.equal(max, 1);
+  });
+
+  // NOTE: AC4/5's "combined active-count never > 1" (a raw enqueueWrite and a job may
+  // not overlap) was DELETED, not weakened. It asserted the single shared lane that is
+  // the head-of-line-blocking bug above; the two invariants that actually matter are
+  // kept and asserted separately — jobs stay concurrency 1 (the test above this one,
+  // which is what NFR-1 needs), and SQLite writes stay serialized among themselves
+  // (queue.test.ts's lost-update proof). Nothing asserts the two share a lane, because
+  // they deliberately no longer do.
+
+  // Writes issued from INSIDE a job go through `enqueueWrite` now that the lanes are
+  // split. Under the old shared lane that self-deadlocked (the inner write waited on
+  // the slot the job itself held) — which is why the job path had to use the `*Direct`
+  // variants. Guard the property those call sites now depend on.
+  it('lets a job await a write it enqueues itself (no self-deadlock)', async () => {
+    let wrote = false;
+    const result = await enqueueJob(
+      { type: 't', timeoutMs: 60_000, run: async () => { await enqueueWrite(() => { wrote = true; }); } },
+      { timeoutFn: neverFires },
+    );
+    assert.equal(result.ok, true, 'a job that awaits its own write must complete');
+    assert.equal(wrote, true);
   });
 
   // AC 2/5 — timeout fires the abort signal, marks failed, and the queue proceeds

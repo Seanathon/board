@@ -15,12 +15,33 @@ import type { AssetSpec, CaptureAdapter, CaptureCtx, CaptureResult, CaptureSourc
 // `error`. Teardown (`close()`) is guaranteed in `finally` and on abort (timeout).
 
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 1.5 };
-const GOTO_TIMEOUT_MS = 30_000;
+// Budget for reaching `domcontentloaded` — a REAL failure if it expires (no document,
+// nothing to shoot). 30s was inherited from when this timeout ALSO had to absorb the
+// wait for a quiet network; the settle is separate and best-effort now, so the two
+// budgets are sized independently.
+//
+// These are deliberately generous. board-oss is single-tenant and self-hosted: nobody
+// is queued behind you competing for a shared worker, so a capture that takes two
+// minutes and SUCCEEDS beats one that fails fast at 30s and leaves you re-adding the
+// link by hand. A heavy page on a slow link needs well over 30s just to parse — under
+// CDP throttling twenty.com missed the old budget at 30.9s and the item died with
+// "Timed out." Timeouts here exist to stop a genuinely wedged capture, not to enforce
+// a latency SLO.
+const GOTO_TIMEOUT_MS = 120_000;
+// How long to let the network go quiet AFTER the document is ready. Best-effort: when
+// it expires we shoot anyway. See the note on the goto strategy below.
+const SETTLE_TIMEOUT_MS = 30_000;
 
 // Minimal puppeteer-ish surfaces so the launcher is injectable (real Browser fits).
 export interface CapturePage {
   setViewport(vp: { width: number; height: number; deviceScaleFactor: number }): Promise<unknown>;
   goto(url: string, opts: { waitUntil: string; timeout: number }): Promise<unknown>;
+  /**
+   * Optional ONLY so hand-written test fakes stay valid. Real captures always take the
+   * settle path: puppeteer's Page has had this since v5 and we pin ^24. Don't read the
+   * `?.` at the call site as "this might not run in production" — it always does.
+   */
+  waitForNetworkIdle?(opts: { idleTime: number; timeout: number }): Promise<unknown>;
   screenshot(opts: { clip: { x: number; y: number; width: number; height: number } }): Promise<Buffer | Uint8Array>;
   evaluate<T>(fn: (...args: unknown[]) => T): Promise<T>;
 }
@@ -84,7 +105,18 @@ export function createUrlScreenshotAdapter(deps: Deps = {}): CaptureAdapter {
         const browser = await launchP;
         const page = await browser.newPage();
         await page.setViewport(VIEWPORT);
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: GOTO_TIMEOUT_MS });
+        // Navigate on `domcontentloaded`, then let the network settle SEPARATELY and
+        // best-effort. `waitUntil: 'networkidle2'` made a quiet network a PRECONDITION
+        // of the capture: any page holding a connection open — analytics beacon, chat
+        // widget, video preload, websocket — never satisfies it, and goto rejected at
+        // 30s with a TimeoutError that cleanErrorReason renders on the card as
+        // "Timed out." (reproduced against twenty.com and stigg.io under CDP
+        // throttling: 30755ms, no item). A slow connection does the same to an
+        // ordinary page. Screenshot quality is worth waiting for; it is not worth
+        // losing the item over, so a settle that expires just means we shoot a beat
+        // early. renderPageText (browser.ts) already navigates this way.
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: GOTO_TIMEOUT_MS });
+        await page.waitForNetworkIdle?.({ idleTime: 500, timeout: SETTLE_TIMEOUT_MS }).catch(() => {});
         await sleep(1000);
         await dismissOverlays(page);
         await sleep(400);

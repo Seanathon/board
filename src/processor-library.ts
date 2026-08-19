@@ -7,6 +7,9 @@ import { renderPageText } from "./browser.js";
 // Below this many characters of extracted text, fetch+readability is assumed to
 // have failed (e.g. a JS-rendered SPA shell) and the headless-render fallback runs.
 const MIN_USEFUL_TEXT = 200;
+// Ceiling for the direct HTML fetch. Generous like the other capture budgets (this is a
+// single-tenant box), but FINITE — see the note at the call site.
+const FETCH_TIMEOUT_MS = 60_000;
 
 type LibraryAnalysis = {
   title: string;
@@ -204,7 +207,13 @@ export async function captureLibrary(
   const fetchFn = opts?.fetchImpl ?? globalThis.fetch;
   const renderFn = opts?.renderImpl ?? renderPageText;
 
-  const response = await fetchFn(url);
+  // Bound the direct fetch. Without a signal this waits forever on a server that
+  // accepts the connection and then goes quiet, and the only backstop is the whole
+  // capture job's budget (CAPTURE_TIMEOUT_MS) — which pins the item in `processing`
+  // for minutes and, because the job lane is serial, holds every queued add behind it.
+  // The generous budgets elsewhere are safe precisely because each step is bounded;
+  // this was the one that wasn't.
+  const response = await fetchFn(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   const html = await response.text();
   const imageUrl = extractOgImage(html, url); // hero image from the static HTML (head meta)
   let text = extractReadableMarkdown(html, url);

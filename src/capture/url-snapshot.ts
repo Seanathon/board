@@ -23,7 +23,11 @@ import { assertCapturableUrl } from './net-guard.js';
 // than spawning) is verified by inspection/manual run (no real Chrome in the suite).
 
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024; // 8MB per-snapshot cap (footprint guardrail)
-const SNAPSHOT_TIMEOUT_MS = 45_000;
+// SingleFile inlines every asset on the page, so this is strictly slower than the
+// screenshot capture it mirrors — 45s under-served a heavy page and, because a failed
+// snapshot is swallowed (AC4), it just silently produced no archive. Sized like the
+// other capture budgets: a ceiling for a wedged job on a single-tenant box, not an SLO.
+const SNAPSHOT_TIMEOUT_MS = 180_000;
 
 export interface SnapshotBrowser extends TeardownBrowser {
   /** puppeteer Browser.wsEndpoint() — the CDP endpoint SingleFile connects to. */

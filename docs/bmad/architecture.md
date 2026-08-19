@@ -40,7 +40,7 @@ note: "Decisions were reached by multi-round party consensus; this formalizes th
 - **AD3 SQLite/Drizzle** — WAL + JSON + FTS5; screenshots files-on-disk, path in DB.
 - **AD4 Capture in-process, concurrency 1** — launch→screenshot→kill; the offloadable sidecar *service* is deferred but its **contract is designed in v1** (token-authed, idempotent).
 - **AD5 `LLMProvider` seam, two transports** — `HttpProvider` (API key / open model) + `CliProvider` (coding-agent subprocess); default install zero-coding-CLI.
-- **AD6 Async job model** — in-process single-writer worker queue + `status` column + SSE; no external broker. The queue **is** the SQLite single-writer guard.
+- **AD6 Async job model** — in-process worker queue + `status` column + SSE; no external broker. **Two lanes:** jobs serialize at concurrency 1 (memory bound), SQLite writes serialize separately (write-interleaving bound). *Revised: the job lane was originally the SQLite single-writer guard too, which made every interactive write wait on a running capture's network I/O.*
 - **AD7 Reverse-proxy-only auth** — localhost bind default.
 - **AD9 Schema-as-data** — board behavior is a stored `board_descriptor` on a closed field-type set; enrichment + rendering are dynamic.
 - **AD10 Agentic composer** — v1 launch feature, built after the seeded boards; meta-schema + validate-and-repair.
@@ -87,7 +87,7 @@ interface CaptureAdapter { fetch(source: string, ctx): Promise<{ fields: Record<
 - **Composer meta-schema:** the JSON-schema *for a descriptor*; the composer emits a descriptor validated against it (validate-and-repair; closed types; field cap; reserved-key rejection).
 
 ### 4.5 Job model & status (AD6)
-- `JobQueue` = a single async worker draining jobs serially; capture + enrichment jobs run here (this is also the SQLite single-writer).
+- `JobQueue` = a single async worker draining jobs serially; capture + enrichment jobs run here. It is **not** the SQLite single-writer: writes have their own lane, because a job holds its slot across Chrome + LLM round-trips (up to `CAPTURE_TIMEOUT_MS`) while every SQLite write is sub-millisecond. Sharing one lane meant `POST /api/collections/:cid/items` blocked for the length of the running capture. Writes issued from inside a job go through the write lane like any other.
 - `item.status`: `pending → processing → done → error` (`error_reason` persisted). SSE endpoint streams transitions; refetch/poll fallback.
 
 ## 5. Data model

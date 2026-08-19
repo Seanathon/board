@@ -18,34 +18,53 @@ import type { DbHandle } from './index.js';
 // routing reads through the queue would serialize everything and kill the browse /
 // SSE read path. Only writes serialize.
 //
-// This is the same serialized path Story 5.1's job worker reuses to drain
-// capture/enrichment jobs at concurrency 1 — keep `enqueueWrite` generic so 5.1
-// layers jobs on top rather than rewriting it.
+// TWO LANES, NOT ONE (revises AD6's "one serializer, not two").
+//
+// Jobs used to run on this same chain, so a capture held the WRITE lane for its whole
+// duration (Chrome launch + LLM round-trip). That made every interactive write wait on
+// unrelated network I/O: `addItemSkill`'s one-row INSERT — and so POST /api/collections
+// /:cid/items — blocked for the length of the running capture (measured: 42s with one
+// job in flight; up to CAPTURE_TIMEOUT_MS), which read to users as the add
+// silently hanging.
+//
+// The two constraints being collapsed were never the same constraint:
+//   • concurrency 1 for JOBS — Chromium is ~400-520MB resident, so two concurrent
+//     captures OOM the 512MB-1GB LXC (NFR-1/C1). Bounds MEMORY.
+//   • single-writer for SQLITE (AD6) — orders logical read-modify-writes. Bounds
+//     WRITE INTERLEAVING, and every such write is sub-millisecond.
+// Separate lanes honor both: jobs still run strictly one at a time, and a write never
+// queues behind one. Writes issued from inside a job go through `enqueueWrite` like any
+// other — with the lanes split that no longer deadlocks (see `writeItemDirect`).
+type Lane = { tail: Promise<unknown> };
 
 // A promise chain is the serializer: each enqueued op waits for the previous to
 // settle. Errors are swallowed from the *chain* (so one failure can't wedge the
 // queue) but propagated to the *caller* via the returned promise.
-let tail: Promise<unknown> = Promise.resolve();
+const writeLane: Lane = { tail: Promise.resolve() };
+const jobLane: Lane = { tail: Promise.resolve() };
 
-/**
- * Serialize a write operation. Returns a promise resolving with `fn`'s result (or
- * rejecting with its error). Only one `fn` runs at a time, in enqueue order.
- */
-export function enqueueWrite<T>(fn: () => T | Promise<T>): Promise<T> {
-  const run = tail.then(() => fn());
-  tail = run.then(
+function serialize<T>(lane: Lane, fn: () => T | Promise<T>): Promise<T> {
+  const run = lane.tail.then(() => fn());
+  lane.tail = run.then(
     () => undefined,
     () => undefined,
   );
   return run;
 }
 
-// --- Story 5.1: the JOB layer on the SAME single worker ---
+/**
+ * Serialize a write operation. Returns a promise resolving with `fn`'s result (or
+ * rejecting with its error). Only one `fn` runs at a time, in enqueue order.
+ */
+export function enqueueWrite<T>(fn: () => T | Promise<T>): Promise<T> {
+  return serialize(writeLane, fn);
+}
+
+// --- Story 5.1: the JOB layer, on its OWN lane ---
 //
-// Capture/enrichment jobs (Epics 6/7) run here, serially (concurrency 1), on the
-// SAME `tail` chain as writes — so a job holds the one worker slot for its full
-// duration (Chrome launch + LLM round-trip) and never overlaps another job OR a raw
-// write. This is also the SQLite single-writer guard (AD6) — one serializer, not two.
+// Capture/enrichment jobs (Epics 6/7) run here, serially (concurrency 1) — a job holds
+// the job slot for its full duration (Chrome launch + LLM round-trip) and never
+// overlaps another job. It does NOT hold the write lane; see the two-lane note above.
 //
 // Concurrency 1 is load-bearing: Chromium is ~400-520MB resident, so two concurrent
 // captures OOM the 512MB-1GB LXC (NFR-1/C1).
@@ -93,7 +112,7 @@ export function enqueueJob(job: Job, opts?: { timeoutFn?: TimeoutFn }): Promise<
   let resolveStatus!: (r: JobResult) => void;
   const status = new Promise<JobResult>((r) => (resolveStatus = r));
 
-  enqueueWrite(async () => {
+  serialize(jobLane, async () => {
     const controller = new AbortController();
     let settled = false;
 
@@ -163,10 +182,21 @@ export function writeItem(handle: DbHandle, item: NewItem, itemAssets?: NewAsset
 
 /**
  * The DIRECT item write (transaction + search_blob + FTS + optional asset replace),
- * with NO enqueue. MUST be called only from inside a job that already holds the
- * worker slot (capture/enrichment work) — calling `writeItem` there would deadlock
- * (the inner `enqueueWrite` waits for the outer slot, which awaits the inner). Other
- * callers (importer, skills, routes) use `writeItem`, which wraps this in the queue.
+ * with NO enqueue. Synchronous, so it is atomic on its own; what it does NOT get is
+ * ordering against other writers.
+ *
+ * It exists for callers that must do `read → write` with no await between them —
+ * `writeItemDirect` takes the FULL desired row, so a merge assembled from a stale
+ * snapshot would revert whatever landed in between. Those callers wrap BOTH steps in a
+ * single `enqueueWrite` and use this inside it (see capture/adapter.ts and
+ * enrichment/worker.ts). That wrapping is what gives them ordering; calling this bare
+ * skips the write lane.
+ *
+ * It used to exist for a different reason — jobs shared the write lane, so a job that
+ * called the enqueueing `writeItem` self-deadlocked (the inner `enqueueWrite` waited on
+ * the slot the job itself held). The lanes are separate now, so that deadlock is gone
+ * and job code can enqueue writes freely. Other callers (importer, skills, routes) use
+ * `writeItem`, which wraps this in the queue.
  */
 export function writeItemDirect(handle: DbHandle, item: NewItem, itemAssets?: NewAsset[]): void {
   handle.sqlite.transaction(() => {
@@ -259,6 +289,13 @@ export interface RunItemJobArgs {
  * status is written here, after the job result, so an item is never stuck
  * `processing`. (A hard crash/OOM where neither runs is swept by
  * `reconcileInterruptedItems` at boot.)
+ *
+ * The status writes below stay DIRECT (not enqueued) deliberately. They are
+ * single-column updates, not read-modify-writes, so they are already atomic — and each
+ * is guarded by a synchronous `signal.aborted` check that must not be separated from
+ * its write. Enqueueing them would put an await between the check and the write, giving
+ * abandoned work a window to clobber the timeout path's terminal `error` back to `done`
+ * — the exact thing that guard exists to prevent.
  */
 export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promise<JobResult> {
   const job: Job = {

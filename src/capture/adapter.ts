@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 
 import { boards, items, type NewAsset } from '../db/schema.js';
-import { writeItemDirect } from '../db/queue.js';
+import { enqueueWrite, writeItemDirect } from '../db/queue.js';
 import { statusHub } from '../sse.js';
 import { createUrlScreenshotAdapter } from './url-screenshot.js';
 import { createUrlReadableAdapter } from './url-readable.js';
@@ -148,8 +148,6 @@ export async function runCaptureForItem(
     registerTeardown: args.registerTeardown,
   });
 
-  const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
-
   // Captured keys that are SYSTEM COLUMNS (e.g. `title`) belong on the column, not in
   // the `item.fields` JSON bag (the descriptor contract: title/notes/favorite are
   // system columns). Lift those out; merge the rest into fields. Without this, a
@@ -160,7 +158,6 @@ export async function runCaptureForItem(
     if (SYSTEM_COLUMNS.has(k)) systemUpdates[k] = v;
     else capturedFields[k] = v;
   }
-  const mergedFields = { ...((item?.fields as Record<string, unknown>) ?? {}), ...capturedFields };
   const assetRows: NewAsset[] = result.assets.map((a, i) => ({
     id: `${args.itemId}-${a.kind}-${i}`,
     itemId: args.itemId,
@@ -171,14 +168,27 @@ export async function runCaptureForItem(
     hash: a.hash ?? null,
   }));
 
-  // Capture runs INSIDE the worker job (slot held) → use the DIRECT write (calling
-  // the enqueueing writeItem here would deadlock). Replaces the item's assets
-  // (delete-then-insert) → idempotent re-capture.
-  writeItemDirect(
-    handle,
-    { ...item, ...systemUpdates, id: args.itemId, boardId: args.boardId, fields: mergedFields },
-    assetRows,
-  );
+  // Read the row and write it back in ONE op on the write lane, with no await between
+  // them — `writeItemDirect` takes the FULL desired row, so a merge built from a stale
+  // snapshot would revert whatever landed in between. Enqueued rather than called
+  // directly: jobs and writes are separate lanes now, so a write from inside a job no
+  // longer self-deadlocks. Replaces the item's assets (delete-then-insert) → idempotent
+  // re-capture.
+  const prevTitle = await enqueueWrite(() => {
+    const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
+    writeItemDirect(
+      handle,
+      {
+        ...item,
+        ...systemUpdates,
+        id: args.itemId,
+        boardId: args.boardId,
+        fields: { ...((item?.fields as Record<string, unknown>) ?? {}), ...capturedFields },
+      },
+      assetRows,
+    );
+    return item?.title ?? undefined;
+  });
 
   // Progressive reveal: the row now holds the page (title + image) but the AI read is
   // still outstanding, and the item's DB status stays `processing` throughout. Announce
@@ -189,7 +199,7 @@ export async function runCaptureForItem(
     itemId: args.itemId,
     boardId: args.boardId,
     status: 'captured',
-    title: (systemUpdates as { title?: string }).title ?? item?.title ?? undefined,
+    title: (systemUpdates as { title?: string }).title ?? prevTitle,
     screenshot: shot?.path || undefined,
   });
 }

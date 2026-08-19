@@ -3,7 +3,7 @@ import { z, type ZodType } from 'zod';
 import { eq } from 'drizzle-orm';
 
 import { boards, items } from '../db/schema.js';
-import { writeItemDirect } from '../db/queue.js';
+import { enqueueWrite, writeItemDirect } from '../db/queue.js';
 import type { BoardDescriptor, Field } from '../descriptor/types.js';
 import type { LLMProvider } from '../skills/types.js';
 import type { DbHandle } from '../db/index.js';
@@ -119,7 +119,21 @@ export async function runEnrichmentForItem(
     }
     if (allowedKeys.has(k) && v !== undefined) enriched[k] = v;
   }
-  const mergedFields = { ...((item.fields as Record<string, unknown>) ?? {}), ...enriched };
   const titleUpdate = refinedTitle !== undefined ? { title: refinedTitle } : {};
-  writeItemDirect(handle, { ...item, ...titleUpdate, id: item.id, boardId: item.boardId, fields: mergedFields });
+  // Re-read the row INSIDE the write op — no await between the read and the write — so
+  // the merge lands on fresh state. `writeItemDirect` takes the FULL desired row, and
+  // the LLM round-trip above is long enough (tens of seconds) for an interactive edit
+  // to arrive on the write lane; merging onto the pre-LLM snapshot would silently
+  // revert it. Enqueued rather than direct: jobs and writes are separate lanes now, so
+  // a write from inside a job no longer self-deadlocks.
+  await enqueueWrite(() => {
+    const fresh = handle.db.select().from(items).where(eq(items.id, args.itemId)).get() ?? item;
+    writeItemDirect(handle, {
+      ...fresh,
+      ...titleUpdate,
+      id: item.id,
+      boardId: item.boardId,
+      fields: { ...((fresh.fields as Record<string, unknown>) ?? {}), ...enriched },
+    });
+  });
 }
