@@ -103,6 +103,14 @@ export const views = sqliteTable('view', {
   updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
 });
 
+// Runtime-editable configuration, kept in the SAME SQLite file as the collection so
+// the "copy one file and walk away" promise stays true (a sidecar JSON would break it).
+export const settings = sqliteTable('setting', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+});
+
 export type Board = typeof boards.$inferSelect;
 export type NewBoard = typeof boards.$inferInsert;
 export type Item = typeof items.$inferSelect;

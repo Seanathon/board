@@ -34,6 +34,8 @@ import { disabledLlm } from "./skills/types.js";
 import { startSseStream } from "./sse.js";
 import { pipeline } from "node:stream/promises";
 import { createArchiveStream, extractArchive } from "./db/archive.js";
+import { getAllSettings, setSetting } from "./db/settings.js";
+import { DEFAULT_INSPIRATION_PROMPT } from "./add.js";
 import { importDocumentSkill } from "./skills/import-document.js";
 import { registerV1Api, sha256Hex } from "./api/v1.js";
 import { buildBookmarklet, TOKEN_PLACEHOLDER } from "./capture-clients/bookmarklet.js";
@@ -370,6 +372,43 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     reply.type(type);
     return reply.send(fs.createReadStream(abs));
   });
+
+  // --- Settings: runtime-editable config (the analysis lens) ---
+  // The store is a generic key/value table; this route is NOT. Only prompts may be
+  // written, so an open PATCH can't scribble arbitrary keys into the same file the
+  // collection lives in.
+  const WRITABLE_SETTING = /^[a-z0-9-]+\.system_prompt$/;
+
+  app.get("/api/settings", async () => ({
+    settings: getAllSettings(opts.db ?? getDb()),
+    // Served so the UI can show the built-in text as placeholder and offer a restore,
+    // instead of making "empty" and "default" look the same.
+    defaults: { "inspiration.system_prompt": DEFAULT_INSPIRATION_PROMPT },
+  }));
+
+  app.patch<{ Body: { settings?: Record<string, unknown> } }>(
+    "/api/settings",
+    async (req, reply) => {
+      const incoming = req.body?.settings;
+      if (!incoming || typeof incoming !== "object") {
+        reply.status(400);
+        return { error: "settings object required" };
+      }
+      for (const key of Object.keys(incoming)) {
+        if (!WRITABLE_SETTING.test(key)) {
+          reply.status(400);
+          return { error: `"${key}" is not a writable setting` };
+        }
+        if (typeof incoming[key] !== "string") {
+          reply.status(400);
+          return { error: `"${key}" must be a string` };
+        }
+      }
+      const handle = opts.db ?? getDb();
+      for (const [key, value] of Object.entries(incoming)) setSetting(handle, key, value as string);
+      return { settings: getAllSettings(handle) };
+    }
+  );
 
   // --- Backup: the whole collection as a streamed tar (metadata + image bytes) ---
   // Named "backup", not "archive": `archive` already means page-snapshot archival here.

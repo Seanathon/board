@@ -934,3 +934,56 @@ test("GET /api/backup streams a tar backup; POST /api/backup restores it", async
     fs.rmSync(srcShots, { recursive: true, force: true });
   }
 });
+
+// --- Settings (runtime-editable analysis prompt) ---
+
+test("GET /api/settings exposes stored values and the built-in defaults", async () => {
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    const res = await app.inject({ method: "GET", url: "/api/settings" });
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body) as any;
+    // The UI needs the default to show as placeholder text and to offer "restore".
+    assert.ok(body.defaults["inspiration.system_prompt"].length > 0, "the built-in default is served");
+    assert.ok(!/naruki/i.test(body.defaults["inspiration.system_prompt"]));
+    assert.deepEqual(body.settings, {}, "nothing is overridden on a fresh install");
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("PATCH /api/settings saves an override and reads back", async () => {
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    const save = await app.inject({
+      method: "PATCH", url: "/api/settings",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings: { "inspiration.system_prompt": "Only brutalist typography." } }),
+    });
+    assert.equal(save.statusCode, 200, save.body);
+    const res = await app.inject({ method: "GET", url: "/api/settings" });
+    assert.equal(JSON.parse(res.body).settings["inspiration.system_prompt"], "Only brutalist typography.");
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("PATCH /api/settings refuses a key outside the allowlist", async () => {
+  // The store is generic; the ROUTE is not. An open write surface would let anything
+  // scribble arbitrary keys into the same file the collection lives in.
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    const res = await app.inject({
+      method: "PATCH", url: "/api/settings",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings: { "evil": "x" } }),
+    });
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.parse(res.body).error, /not a writable setting|unknown/i);
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

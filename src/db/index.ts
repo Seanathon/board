@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS board (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+CREATE TABLE IF NOT EXISTS setting (
+  key TEXT PRIMARY KEY NOT NULL,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 CREATE TABLE IF NOT EXISTS item (
   id TEXT PRIMARY KEY NOT NULL,
   board_id TEXT NOT NULL REFERENCES board(id),
