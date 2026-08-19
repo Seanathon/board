@@ -964,8 +964,13 @@
       box-sizing: border-box;
       animation: ghost-breathe 1.9s ease-in-out infinite;
     }
-    .ghost-tags { display: flex; gap: 6px; }
-    .ghost-tags .ghost-bar { height: 16px; border-radius: 999px; }
+    /* Two lines at the .card-steal cadence (12px text, 1.4 line-height, two-line
+       clamp), so the ghost occupies the height the description will. */
+    .ghost-steal { display: flex; flex-direction: column; gap: 7px; margin-bottom: 11px; }
+    .ghost-steal .ghost-bar { height: 10px; }
+    /* Pills at .tag's real height and radius, wrapping the same way. */
+    .ghost-tags .ghost-bar { height: 18px; border-radius: 20px; }
+    .ghost-badge { width: 56px; height: 17px; border-radius: 4px; flex-shrink: 0; }
     @keyframes ghost-breathe {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.42; }
@@ -1398,6 +1403,30 @@
     }
 
     .design-field { }
+
+    /* Section heading for a group of enriched fields (the dotted prefix: meta,
+       design, reflection). It had no rule at all and rendered as body text, so a
+       group name read like a stray word above the grid. It sits one level above
+       .field-label: brighter and wider-tracked, with a hairline rule carrying the
+       eye across the column break. The rule is what separates the two levels, so
+       both can stay small and uppercase without competing. */
+    .field-group-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 28px 0 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-2);
+    }
+    .field-group-label::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
 
     .field-label {
       font-size: 10px;
@@ -2439,10 +2468,18 @@ LLM_API_KEY=sk-…</pre>
     return `<div class="card-state"><span class="card-state-dot"></span><span>${STATE_LABEL[state]}</span></div>`;
   }
 
-  /** Ghosted stand-ins for the fields enrichment has not filled yet. */
+  /**
+   * Ghosted stand-ins for the fields enrichment has not filled yet, cut to the real
+   * card's geometry: two lines at the .card-steal cadence (12px/1.4, clamped to two)
+   * and a wrapping row of tag pills at .tag's height and radius. Widths vary so the
+   * block reads as text and tags rather than as a progress bar.
+   */
+  const GHOST_TAG_WIDTHS = ['74px', '56px', '88px', '62px', '48px', '80px'];
+
   function ghostBody() {
-    return `<div class="card-tags ghost-tags" style="margin-top:8px">`
-      + ghostBar('54px', 0) + ghostBar('38px', 90) + ghostBar('46px', 180)
+    return `<div class="ghost-steal">${ghostBar('100%', 0)}${ghostBar('68%', 80)}</div>`
+      + `<div class="card-tags ghost-tags">`
+      + GHOST_TAG_WIDTHS.map((w, i) => ghostBar(w, 140 + i * 55)).join('')
       + `</div>`;
   }
 
@@ -2492,7 +2529,7 @@ LLM_API_KEY=sk-…</pre>
         : `<div class="card-title" style="flex:1">${ghostBar('72%')}</div>`;
       const badge = state === 'ready'
         ? `<span class="tier-badge ${b.meta?.tier}">${TIER_LABELS[b.meta?.tier] || b.meta?.tier || ''}</span>`
-        : '';
+        : inFlight ? `<span class="ghost-bar ghost-badge"></span>` : '';
       const body = state === 'ready'
         ? `<div class="card-steal">${esc(b.design?.steal_this || '')}</div>
           <div class="card-tags">
@@ -2732,11 +2769,21 @@ LLM_API_KEY=sk-…</pre>
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(e);
     }
-    const displayHtml = [...groups.entries()].map(([g, es]) => `
-      ${g ? `<div class="field-group-label">${esc(g)}</div>` : ''}
-      <div class="design-grid">
+    // Field groups (the dotted prefix: meta, design, reflection) become tabs rather
+    // than a stack of headings — one group is in view at a time, so a long analysis
+    // stops pushing the rest of the modal off-screen. Falls back to a plain grid when
+    // there is only one group: a lone tab is a heading pretending to be a control.
+    const groupList = [...groups.entries()];
+    const panelId = (g) => g || 'fields';
+    const gridFor = (es) => `<div class="design-grid">
         ${es.map(e => `<div class="design-field"><div class="field-label">${esc(e.field.label)}</div>${rh.renderField ? rh.renderField(e.field, e.value) : `<div class="field-value">${esc(String(e.value))}</div>`}</div>`).join('')}
-      </div>`).join('');
+      </div>`;
+    const displayHtml = groupList.length > 1
+      ? `<div class="modal-tabs" role="tablist">
+          ${groupList.map(([g], i) => `<button class="modal-tab${i === 0 ? ' active' : ''}" data-panel="${esc(panelId(g))}" role="tab" aria-selected="${i === 0}">${esc(g || 'Fields')}</button>`).join('')}
+        </div>
+        ${groupList.map(([g, es], i) => `<div class="modal-panel${i === 0 ? ' active' : ''}" data-panel="${esc(panelId(g))}" role="tabpanel">${gridFor(es)}</div>`).join('')}`
+      : groupList.map(([, es]) => gridFor(es)).join('');
 
     const editInputs = editableFields.map(f => `<div class="reflection-field"><div class="field-label">${esc(f.label)}</div>${modalEditInput(f, ch.getFieldValue ? ch.getFieldValue(item, f.key) : undefined)}</div>`).join('');
     const editSection = `<div class="reflection-grid" style="margin-top:16px">
@@ -2775,6 +2822,17 @@ LLM_API_KEY=sk-…</pre>
     document.getElementById('modal-save').onclick = () => saveItemEdits(item.id);
     document.getElementById('modal-fav').onclick = () => toggleItemFavorite(item.id);
     bindRetryButtons(content);
+    content.querySelectorAll('.modal-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.panel;
+        content.querySelectorAll('.modal-tab').forEach(t => {
+          const on = t === tab;
+          t.classList.toggle('active', on);
+          t.setAttribute('aria-selected', String(on));
+        });
+        content.querySelectorAll('.modal-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === target));
+      });
+    });
     document.getElementById('modal-overlay').classList.add('open');
   }
 
