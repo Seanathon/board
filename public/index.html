@@ -3928,6 +3928,15 @@ LLM_API_KEY=sk-…</pre>
           <p>I found it genuinely useful. I hope you do too.</p>
           <p class="welcome-sign">Sean, the original creator of Board.</p>
         </div>
+
+        <!-- Scoped to this tab on purpose: "Read the docs" and "Maybe later" are the
+             next steps for someone still deciding, and read as noise beside a prompt
+             editor or a delete confirmation. The modal's own close button serves the
+             other tabs. -->
+        <div class="welcome-footer">
+          <a class="empty-cta" href="https://github.com/Hayawan/board" target="_blank" rel="noopener">Read the docs on GitHub</a>
+          <button type="button" class="empty-link" data-welcome-close>Maybe later</button>
+        </div>
         </div><!-- /start panel -->
 
         <div class="modal-panel" data-panel="data" role="tabpanel">
@@ -3979,10 +3988,6 @@ LLM_API_KEY=sk-…</pre>
           </div>
         </div><!-- /system panel -->
 
-        <div class="welcome-footer">
-          <a class="empty-cta" href="https://github.com/Hayawan/board" target="_blank" rel="noopener">Read the docs on GitHub</a>
-          <button type="button" class="empty-link" data-welcome-close>Maybe later</button>
-        </div>
       </div>
     `);
     wireWelcomeTabs();
