@@ -3,6 +3,7 @@ import { runCaptureForItem, type CaptureRegistry, type CaptureSource } from '../
 import { runEnrichmentForItem } from './worker.js';
 import type { LLMProvider } from '../skills/types.js';
 import type { DbHandle } from '../db/index.js';
+import { config } from '../config.js';
 
 // Story 7.1/7.3 — the shared capture→enrich pipeline as ONE worker job, so the item
 // holds a single `processing` state until enriched (Story 5.3 contract). Used by
@@ -11,7 +12,9 @@ import type { DbHandle } from '../db/index.js';
 // columns; enrichment writes ONLY enrichable schema keys — so notes/favorite and
 // enrichable:false fields survive.
 
-const DEFAULT_CAPTURE_TIMEOUT_MS = 60_000;
+// Budget for capture + the LLM read together lives in config (CAPTURE_TIMEOUT_MS) so a
+// slow local model can be given room; the old fixed 60s failed ordinary CLI reads. Read
+// per-call, not at module load, so importing this module never depends on boot order.
 
 export interface CaptureEnrichArgs {
   itemId: string;
@@ -51,7 +54,7 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
   return runItemJob(handle, {
     itemId: args.itemId,
     type: 'capture',
-    timeoutMs: args.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS,
+    timeoutMs: args.timeoutMs ?? config.captureTimeoutMs,
     timeoutFn: args.timeoutFn,
     work: async (signal) => {
       if (canCapture) {

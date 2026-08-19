@@ -10,6 +10,9 @@ import {
   moveUrl,
   skillsUrl,
   eventsUrl,
+  itemRenderState,
+  isInFlight,
+  safeErrorReason,
   collectionChrome,
   libraryHaystack,
   matchesLibraryFilters,
@@ -450,4 +453,73 @@ test("renderBoardsFallback: no-boards variant invites composing the first board"
 test("renderEmptyState: the layout-preview ghost is aria-hidden (decorative)", () => {
   const html = renderEmptyState({ id: "inspiration", name: "Inspiration", view: "grid" });
   assert.ok(html.includes('aria-hidden="true"'), "ghost preview is hidden from AT");
+});
+
+// --- Capture lifecycle render state ---
+// One helper decides what a card shows while an item is captured and enriched.
+// It must never skeletonize an item that already carries its AI read: before the
+// status backfill, 150 legacy imported items sat at `pending` with complete data,
+// and a naive status check would have ghosted an entire board.
+
+test("itemRenderState: a finished item is ready", () => {
+  assert.equal(itemRenderState({ status: "done", title: "T", screenshot: "s.png" }), "ready");
+});
+
+test("itemRenderState: a freshly added item with nothing captured yet is capturing", () => {
+  assert.equal(itemRenderState({ status: "pending", title: "", url: "https://x" }), "capturing");
+  assert.equal(itemRenderState({ status: "processing", title: "", url: "https://x" }), "capturing");
+});
+
+test("itemRenderState: capture landed but the AI read has not is reading", () => {
+  assert.equal(itemRenderState({ status: "processing", title: "eve", screenshot: "s.png" }), "reading");
+  assert.equal(itemRenderState({ status: "pending", title: "eve" }), "reading");
+});
+
+test("itemRenderState: a failed item is failed regardless of what captured", () => {
+  assert.equal(itemRenderState({ status: "error", error_reason: "timed out", title: "eve", screenshot: "s.png" }), "failed");
+  assert.equal(itemRenderState({ status: "error", title: "" }), "failed");
+});
+
+test("itemRenderState: an item carrying its AI read is ready even at a stale status", () => {
+  // Defence in depth for the legacy-import shape (status never set → 'pending').
+  assert.equal(itemRenderState({ status: "pending", title: "Mastra", meta: { tier: "reference" } }), "ready");
+  assert.equal(itemRenderState({ status: "pending", title: "Immich", design: { steal_this: "x" } }), "ready");
+});
+
+test("itemRenderState: library-shaped enrichment counts as an AI read too", () => {
+  // Library items carry summary/topics/key_points, not meta.tier/design.steal_this.
+  assert.equal(itemRenderState({ status: "pending", title: "A Paper", summary: "It compresses traces." }), "ready");
+  assert.equal(itemRenderState({ status: "pending", title: "A Repo", topics: ["llm"] }), "ready");
+});
+
+test("itemRenderState: a missing or unknown status is treated as ready, never as loading", () => {
+  // An unknown status must not trap a card in a skeleton forever.
+  assert.equal(itemRenderState({ title: "T" }), "ready");
+  assert.equal(itemRenderState({ status: "weird", title: "T" }), "ready");
+});
+
+test("isInFlight is true only for the two loading states", () => {
+  assert.equal(isInFlight({ status: "pending", title: "" }), true);
+  assert.equal(isInFlight({ status: "processing", title: "eve" }), true);
+  assert.equal(isInFlight({ status: "done", title: "eve" }), false);
+  assert.equal(isInFlight({ status: "error", title: "eve" }), false);
+});
+
+// A card must never render a raw error string: `cleanErrorReason` produces a known
+// user-safe set, and anything outside it could be a stack or a secret-bearing message.
+test("safeErrorReason passes through the known user-safe reasons", () => {
+  assert.equal(safeErrorReason({ error_reason: "timed out" }), "timed out");
+  assert.equal(safeErrorReason({ error_reason: "could not reach the AI provider" }), "could not reach the AI provider");
+  assert.equal(safeErrorReason({ error_reason: "interrupted" }), "interrupted");
+});
+
+test("safeErrorReason replaces anything unrecognised with a generic message", () => {
+  assert.equal(safeErrorReason({ error_reason: "ECONNREFUSED 10.0.0.4:8080 at Socket.emit" }), "Couldn't analyze this item");
+  assert.equal(safeErrorReason({ error_reason: "sk-ant-secret leaked" }), "Couldn't analyze this item");
+  assert.equal(safeErrorReason({}), "Couldn't analyze this item");
+});
+
+test("safeErrorReason reads either payload spelling", () => {
+  // hydrate ships snake_case; applySseEvent writes camelCase.
+  assert.equal(safeErrorReason({ errorReason: "timed out" }), "timed out");
 });

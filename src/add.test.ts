@@ -8,6 +8,8 @@ import {
   resolveTargetCollection,
   toCodexOutputSchema,
   validateAnalysis,
+  systemPromptFor,
+  DEFAULT_INSPIRATION_PROMPT,
 } from "./add.js";
 
 const validAnalysis = {
@@ -209,4 +211,49 @@ test("resolveTargetCollection succeeds for registered 'library' collection", () 
   );
   assert.equal(collection.id, "library");
   assert.equal(processor.type, "library");
+});
+
+// The analysis prompt was a hardcoded brief for the author's own product. It is now
+// the built-in DEFAULT, overridable per processor type from the settings store, so a
+// user can retune the AI's lens without editing source.
+test("systemPromptFor falls back to the built-in default when nothing is stored", async () => {
+  const { initDb } = await import("./db/index.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-prompt-"));
+  const handle = initDb(path.join(dir, "p.db"));
+  try {
+    assert.equal(systemPromptFor(handle, "inspiration", DEFAULT_INSPIRATION_PROMPT), DEFAULT_INSPIRATION_PROMPT);
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("systemPromptFor prefers a stored override, and ignores a blank one", async () => {
+  const { initDb } = await import("./db/index.js");
+  const { setSetting } = await import("./db/settings.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-prompt2-"));
+  const handle = initDb(path.join(dir, "p.db"));
+  try {
+    setSetting(handle, "inspiration.system_prompt", "Analyze for brutalist typography only.");
+    assert.equal(systemPromptFor(handle, "inspiration", DEFAULT_INSPIRATION_PROMPT), "Analyze for brutalist typography only.");
+
+    // Clearing the box in the UI must restore the default rather than send an empty
+    // system prompt to the model.
+    setSetting(handle, "inspiration.system_prompt", "   ");
+    assert.equal(systemPromptFor(handle, "inspiration", DEFAULT_INSPIRATION_PROMPT), DEFAULT_INSPIRATION_PROMPT);
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the built-in default names no personal project and keeps the untrusted-content guard", () => {
+  assert.ok(!/naruki/i.test(DEFAULT_INSPIRATION_PROMPT), "the shipped default must be generic");
+  assert.match(DEFAULT_INSPIRATION_PROMPT, /untrusted/i, "the prompt-injection guard must survive generalization");
 });

@@ -37,8 +37,12 @@ describe('import-bookmarks skill (Story 3.3)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  // AC 1 + 4 — creates items at status=pending and reports created count
-  it('creates items under the target board at status=pending', async () => {
+  // AC 1 + 4 — creates items and reports created count.
+  // The blanket "everything imports as pending" of the original AC is superseded: an
+  // imported record that already carries its AI read is stored as `done`, because
+  // `pending` is the signal the capture UI renders a skeleton for, and a complete item
+  // has nothing left to wait for. Records without enrichment still import as pending.
+  it('creates items under the target board, status reflecting whether they are enriched', async () => {
     const out = await importBookmarksSkill.run(
       { boardId: INSPIRATION_BOARD_ID, bookmarks: PAYLOAD },
       ctx,
@@ -49,7 +53,9 @@ describe('import-bookmarks skill (Story 3.3)', () => {
 
     const rows = handle.db.select().from(items).where(eq(items.boardId, INSPIRATION_BOARD_ID)).all();
     assert.equal(rows.length, 2);
-    for (const r of rows) assert.equal(r.status, 'pending');
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r.status]));
+    assert.equal(byId['sk-1'], 'done', 'sk-1 carries design.steal_this — already enriched');
+    assert.equal(byId['sk-2'], 'pending', 'sk-2 has no AI read — still awaits enrichment');
   });
 
   // AC 2 + 4 — dedupe by preserved item.id; second run reports skipped, not created

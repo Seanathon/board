@@ -93,6 +93,60 @@ function mapLibrary(r: RawRecord, boardId: string): Mapped {
   return { item, assets: [] };
 }
 
+/**
+ * System keys that live in item COLUMNS, not in the `fields` bag. Kept in sync with
+ * export's `toRecord`, which is the shape the generic mapper reverses.
+ */
+const SYSTEM_RECORD_KEYS = new Set([
+  'id', 'url', 'title', 'status', 'favorite', 'notes',
+  'analysis_agent', 'analysis_model', 'added', 'screenshot',
+]);
+
+/**
+ * Board-agnostic record → item. The exact inverse of export's `toRecord`: system keys
+ * become columns, every nested group re-flattens to dotted field keys, and remaining
+ * scalars/arrays pass through untouched.
+ *
+ * This is what makes an export re-importable. The two hand-written mappers below stay
+ * for the legacy flat files (bookmarks.json / library.json), whose shape predates the
+ * descriptor and whose field selection must not change; every OTHER board — including
+ * every composed one — lands here instead of throwing "no mapping registered".
+ */
+function mapGeneric(r: RawRecord, boardId: string): Mapped {
+  const id = String(r.id);
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(r)) {
+    if (SYSTEM_RECORD_KEYS.has(key)) continue;
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'object' && !Array.isArray(value)) {
+      flattenGroup(fields, key, value);
+    } else {
+      fields[key] = value;
+    }
+  }
+
+  const item: NewItem = {
+    id,
+    boardId,
+    source: typeof r.url === 'string' ? r.url : null,
+    title: typeof r.title === 'string' ? r.title : null,
+    favorite: r.favorite ? 1 : 0,
+    notes: typeof r.notes === 'string' ? r.notes : null,
+    fields,
+    analysisProvider: typeof r.analysis_agent === 'string' ? r.analysis_agent : null,
+    analysisModel: typeof r.analysis_model === 'string' ? r.analysis_model : null,
+    createdAt: parseAdded(r.added),
+  };
+  if (typeof r.status === 'string' && r.status.length > 0) item.status = r.status;
+
+  const itemAssets: NewAsset[] =
+    typeof r.screenshot === 'string' && r.screenshot.length > 0
+      ? [{ id: `${id}-screenshot`, itemId: id, kind: 'screenshot', path: r.screenshot }]
+      : [];
+
+  return { item, assets: itemAssets };
+}
+
 type Mapper = (r: RawRecord, boardId: string) => Mapped;
 
 const MAPPERS: Record<string, Mapper> = {
@@ -119,9 +173,27 @@ export interface ImportResult {
  * re-written — so re-running is idempotent AND user edits to existing items aren't
  * clobbered. Returns created/skipped counts + the created item ids.
  */
+/**
+ * Whether a mapped record already carries an AI read. Mirrors the frontend's
+ * `itemRenderState` so an item is never shown as loading when it has nothing left to
+ * load. Covers both legacy board shapes: Inspiration stores flat dotted keys
+ * (`meta.tier`), Library stores undotted ones (`summary`). A predicate that knows only
+ * one shape strands the other board's items at 'pending' forever.
+ */
+const ENRICHMENT_KEYS = ['meta.tier', 'design.steal_this', 'meta.tags', 'summary', 'topics', 'key_points'];
+
+function hasEnrichment(fields: unknown): boolean {
+  if (!fields || typeof fields !== 'object') return false;
+  const f = fields as Record<string, unknown>;
+  return ENRICHMENT_KEYS.some((k) => {
+    const v = f[k];
+    if (Array.isArray(v)) return v.length > 0;
+    return typeof v === 'string' ? v.length > 0 : v != null;
+  });
+}
+
 export async function importRecords({ handle, boardId, records }: ImportRecordsArgs): Promise<ImportResult> {
-  const mapper = MAPPERS[boardId];
-  if (!mapper) throw new Error(`No importer mapping registered for board "${boardId}"`);
+  const mapper = MAPPERS[boardId] ?? mapGeneric;
   const result: ImportResult = { created: 0, skipped: 0, itemIds: [] };
   for (const [i, r] of records.entries()) {
     // Fail loud on a missing id — it is the idempotency/dedupe key. Without this,
@@ -137,7 +209,11 @@ export async function importRecords({ handle, boardId, records }: ImportRecordsA
       continue;
     }
     const { item, assets: itemAssets } = mapper(r, boardId);
-    await writeItem(handle, item, itemAssets);
+    // Imported records were enriched in the JSON era, so they arrive complete. Without
+    // this they inherit the schema default 'pending' and are indistinguishable from an
+    // item still being captured — which is exactly the signal the capture UI reads.
+    const status = hasEnrichment(item.fields) ? 'done' : item.status;
+    await writeItem(handle, { ...item, status }, itemAssets);
     result.created += 1;
     result.itemIds.push(id);
   }

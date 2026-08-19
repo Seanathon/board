@@ -35,6 +35,14 @@ export interface Config {
   /** Derived: the snapshots (archival self-contained HTML) directory (Story 16.1). */
   snapshotsDir: string;
   chromePath: string | null;
+  /**
+   * Budget for ONE capture job, which covers headless capture AND the LLM read
+   * together (they share a job so the item holds a single `processing` state). The
+   * old fixed 60s was tight enough that an ordinary CLI-provider enrichment could
+   * exhaust it and fail an item whose page had already been captured. Raise it for
+   * slow local models via CAPTURE_TIMEOUT_MS.
+   */
+  captureTimeoutMs: number;
   provider: ProviderConfig;
   /**
    * Coarse "some provider knob is set" signal — the NFR-4 graceful default is false.
@@ -69,6 +77,17 @@ function clean(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parsePositiveMs(value: string | undefined, fallback: number): number {
+  const raw = clean(value);
+  if (raw === undefined) return fallback;
+  if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+    throw new Error(
+      `Invalid config: CAPTURE_TIMEOUT_MS must be a positive integer (milliseconds), got "${value}"`,
+    );
+  }
+  return Number(raw);
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -141,6 +160,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     screenshotsDir: path.join(dataDir, 'screenshots'),
     snapshotsDir: path.join(dataDir, 'snapshots'),
     chromePath: clean(env.CHROME_PATH) ?? null,
+    captureTimeoutMs: parsePositiveMs(env.CAPTURE_TIMEOUT_MS, 180_000),
     provider,
     // Enabled when a transport is configured (agent OR base-URL/key). A model name
     // alone does not enable AI.

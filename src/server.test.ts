@@ -6,10 +6,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { buildServer, getListenOptions, warnIfExposed } from "./server.js";
 import { loadConfig } from "./config.js";
-import { BOOKMARKS_FILE, getCollection, loadCollection, saveCollection } from "./storage.js";
+import { BOOKMARKS_FILE, saveCollection } from "./storage.js";
+import { eq } from "drizzle-orm";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LIBRARY_FILE = path.join(__dirname, "..", getCollection("library").dataFile);
 
 // library.json / bookmarks.json are gitignored personal-capture files (absent in
 // CI). snapshotFile tolerates a missing file (returns null); restoreFile puts the
@@ -26,21 +26,6 @@ function restoreFile(file: string, snap: string | null): void {
   if (snap === null) fs.rmSync(file, { force: true });
   else fs.writeFileSync(file, snap);
 }
-
-const LIBRARY_ITEM = {
-  id: "test-lib-001",
-  url: "https://example.com/article",
-  added: "2025-01-01",
-  title: "Test Article",
-  summary: "A test summary.",
-  topics: ["testing", "server"],
-  author: "Tester",
-  type: "article",
-  key_points: ["Point one", "Point two"],
-  notes: "",
-  analysis_agent: "claude",
-  analysis_model: null,
-};
 
 // --- GET /api/collections ---
 
@@ -226,59 +211,80 @@ test("PATCH /api/collections/:cid/items/:id returns 404 for an unknown item (SQL
   }
 });
 
-// --- Screenshot guard ---
+// --- Manual image upload (SQLite, board-mode-agnostic) ---
 
-test("POST /api/collections/library/items/:id/screenshot returns 400 for non-visual collection", async () => {
-  const libSnapshot = snapshotFile(LIBRARY_FILE);
-  try {
-    saveCollection("library", [LIBRARY_ITEM]);
-    const app = await buildServer();
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/collections/library/items/${LIBRARY_ITEM.id}/screenshot`,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ dataUrl: "data:image/png;base64,abc" }),
-    });
-    assert.equal(res.statusCode, 400);
-    const body = JSON.parse(res.body) as any;
-    assert.ok(body.error.includes("screenshot"), "error message should mention screenshot");
-  } finally {
-    restoreFile(LIBRARY_FILE, libSnapshot);
-  }
-});
-
-test("POST /api/collections/inspiration/items/:id/screenshot passes visual guard", async () => {
-  const bmSnapshot = snapshotFile(BOOKMARKS_FILE);
-  // Story 2.2 (AC 5): inject a temp screenshotsDir so the write never pollutes the
-  // real DATA_DIR / app tree.
+test("POST /api/collections/:cid/items/:id/screenshot uploads to a composed (SQLite) board", async () => {
+  // Regression: the upload route used the legacy JSON handler, which only knew the
+  // three seeded boards and 400'd ("Unknown collection") on a composed board id — so a
+  // manual re-upload after a failed og:image fetch was impossible. It now routes through
+  // the SQLite upload-asset path and works for any board.
+  const { initDb } = await import("./db/index.js");
+  const { seed } = await import("./db/seed.js");
+  const { writeItem } = await import("./db/queue.js");
+  const { boards } = await import("./db/schema.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-cut-"));
   const shotDir = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-shot-"));
+  const handle = initDb(path.join(dir, "c.db"));
+  seed(handle.db);
   try {
-    const testItem = { id: "bm-shot-test", url: "https://example.com", added: "2025-01-01", screenshot: null, title: "T", meta: {}, design: {}, reflection: {}, analysis_agent: "claude", analysis_model: null };
-    saveCollection("inspiration", [testItem]);
-    const app = await buildServer({ screenshotsDir: shotDir });
+    // A composed grid board with one image-less item (auto-capture "failed").
+    handle.db.insert(boards).values({ id: "wishlist", name: "Wish List", view: "grid", descriptor: { name: "Wish List", fields: [] } as any }).run();
+    await writeItem(handle, { id: "wl-1", boardId: "wishlist", source: "https://x", title: "T" });
+    const app = await buildServer({ db: handle, screenshotsDir: shotDir });
+
     const res = await app.inject({
       method: "POST",
-      url: `/api/collections/inspiration/items/${testItem.id}/screenshot`,
+      url: "/api/collections/wishlist/items/wl-1/screenshot",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ dataUrl: "data:image/png;base64,iVBORw0KGgo=" }),
     });
-    // Should not be 400 (screenshot guard allows visual collection)
-    assert.ok(res.statusCode !== 400 || (res.statusCode === 400 && !JSON.parse(res.body).error.includes("not supported")),
-      "inspiration screenshot should not be blocked by visual guard");
+    assert.equal(res.statusCode, 200, "composed-board upload must not 400");
+    const updated = JSON.parse(res.body) as any;
+    assert.ok(updated.screenshot, "the hydrated item should now carry a screenshot path");
 
-    // AC 5 — the file landed under the temp screenshotsDir, NOT the app tree.
-    const writtenPath = path.join(shotDir, "bm-shot-test.png");
-    assert.ok(fs.existsSync(writtenPath), "screenshot must be written under the injected screenshotsDir");
-    assert.ok(!fs.existsSync(path.join(__dirname, "screenshots", "bm-shot-test.png")), "must not write into the app tree");
-
-    // AC 4 — the screenshot is served at /screenshots/<file> (assets don't 404).
-    const served = await app.inject({ method: "GET", url: "/screenshots/bm-shot-test.png" });
-    assert.equal(served.statusCode, 200, "served screenshot should be 200");
-    assert.equal(served.headers["content-type"], "image/png");
-    assert.ok(served.rawPayload.length > 0, "served screenshot should have bytes");
+    // The file landed under the injected screenshotsDir and is served (assets don't 404).
+    assert.ok(fs.existsSync(path.join(shotDir, "wl-1.png")), "image must be written under screenshotsDir");
+    const served = await app.inject({ method: "GET", url: `/${updated.screenshot}` });
+    assert.equal(served.statusCode, 200, "uploaded image should be served");
+    assert.ok(served.rawPayload.length > 0);
   } finally {
-    restoreFile(BOOKMARKS_FILE, bmSnapshot);
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(shotDir, { recursive: true, force: true });
+  }
+});
+
+test("POST .../screenshot returns 404 for an unknown item", async () => {
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/collections/inspiration/items/ghost/screenshot",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dataUrl: "data:image/png;base64,iVBORw0KGgo=" }),
+    });
+    assert.equal(res.statusCode, 404);
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("POST .../screenshot returns 400 for a non-image data URL", async () => {
+  const { writeItem } = await import("./db/queue.js");
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    await writeItem(handle, { id: "bad-shot", boardId: "inspiration", source: "https://x", title: "T" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/collections/inspiration/items/bad-shot/screenshot",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dataUrl: "not-a-data-url" }),
+    });
+    assert.equal(res.statusCode, 400);
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -857,6 +863,125 @@ test("16.3: GET /api/archive/footprint reports snapshot-only bytes + count (read
     const res = await app.inject({ method: "GET", url: "/api/archive/footprint" });
     assert.equal(res.statusCode, 200);
     assert.deepEqual(JSON.parse(res.body), { totalBytes: 200, count: 1 }, "snapshot-only total (screenshot excluded)");
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Backup (streamed tar export/restore) ---
+// Named "backup", not "archive": in this codebase `archive` already means the
+// page-snapshot archival feature (/api/archive/footprint, archive-backfill).
+
+test("GET /api/backup streams a tar backup; POST /api/backup restores it", async () => {
+  // The round trip that makes an export a real backup: metadata AND image bytes, over
+  // a transport that does not depend on holding ~110MB in a browser string.
+  const { initDb } = await import("./db/index.js");
+  const { seed } = await import("./db/seed.js");
+  const { writeItem } = await import("./db/queue.js");
+  const { boards, items } = await import("./db/schema.js");
+
+  const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-arcsrc-"));
+  const srcShots = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-arcshots-"));
+  const src = initDb(path.join(srcDir, "s.db"));
+  seed(src.db);
+  try {
+    src.db.insert(boards).values({ id: "wishlist", name: "Wish List", view: "grid", descriptor: { name: "Wish List", fields: [], view: "grid", ingest_mode: "url-screenshot" } as any }).run();
+    fs.writeFileSync(path.join(srcShots, "w1.png"), Buffer.alloc(300, 3));
+    await writeItem(src, { id: "w1", boardId: "wishlist", source: "https://example.com/w", title: "W" },
+      [{ id: "w1-shot", itemId: "w1", kind: "screenshot", path: "screenshots/w1.png" }]);
+
+    const srcApp = await buildServer({ db: src, screenshotsDir: srcShots });
+    const dl = await srcApp.inject({ method: "GET", url: "/api/backup" });
+    assert.equal(dl.statusCode, 200);
+    assert.match(String(dl.headers["content-disposition"]), /attachment; filename=/);
+    const tar = dl.rawPayload;
+    assert.ok(tar.length % 512 === 0, "a tar is whole 512-byte blocks");
+    assert.equal(tar.subarray(257, 262).toString(), "ustar");
+
+    // Restore into a DIFFERENT, empty install.
+    const destDir = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-arcdest-"));
+    const destShots = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-arcdshots-"));
+    const dest = initDb(path.join(destDir, "d.db"));
+    try {
+      const destApp = await buildServer({ db: dest, screenshotsDir: destShots });
+      const up = await destApp.inject({
+        method: "POST", url: "/api/backup",
+        headers: { "content-type": "application/x-tar" },
+        payload: tar,
+      });
+      assert.equal(up.statusCode, 200, up.body);
+      const body = JSON.parse(up.body) as any;
+      assert.ok(body.boardsCreated >= 4, "every board is recreated on the empty install");
+      assert.equal(body.itemsCreated, 1);
+      assert.equal(body.filesRestored, 1, "the image bytes travel too");
+
+      const row = dest.db.select().from(items).where(eq(items.id, "w1")).get();
+      assert.ok(row, "the composed board item exists after restore");
+      assert.ok(fs.existsSync(path.join(destShots, "w1.png")), "the screenshot file lands in the new install");
+
+      // And the restored image actually serves (this is what 'not a backup' used to break).
+      const served = await destApp.inject({ method: "GET", url: "/screenshots/w1.png" });
+      assert.equal(served.statusCode, 200);
+    } finally {
+      dest.sqlite.close();
+      fs.rmSync(destDir, { recursive: true, force: true });
+      fs.rmSync(destShots, { recursive: true, force: true });
+    }
+  } finally {
+    src.sqlite.close();
+    fs.rmSync(srcDir, { recursive: true, force: true });
+    fs.rmSync(srcShots, { recursive: true, force: true });
+  }
+});
+
+// --- Settings (runtime-editable analysis prompt) ---
+
+test("GET /api/settings exposes stored values and the built-in defaults", async () => {
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    const res = await app.inject({ method: "GET", url: "/api/settings" });
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body) as any;
+    // The UI needs the default to show as placeholder text and to offer "restore".
+    assert.ok(body.defaults["inspiration.system_prompt"].length > 0, "the built-in default is served");
+    assert.ok(!/naruki/i.test(body.defaults["inspiration.system_prompt"]));
+    assert.deepEqual(body.settings, {}, "nothing is overridden on a fresh install");
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("PATCH /api/settings saves an override and reads back", async () => {
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    const save = await app.inject({
+      method: "PATCH", url: "/api/settings",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings: { "inspiration.system_prompt": "Only brutalist typography." } }),
+    });
+    assert.equal(save.statusCode, 200, save.body);
+    const res = await app.inject({ method: "GET", url: "/api/settings" });
+    assert.equal(JSON.parse(res.body).settings["inspiration.system_prompt"], "Only brutalist typography.");
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("PATCH /api/settings refuses a key outside the allowlist", async () => {
+  // The store is generic; the ROUTE is not. An open write surface would let anything
+  // scribble arbitrary keys into the same file the collection lives in.
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    const res = await app.inject({
+      method: "PATCH", url: "/api/settings",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings: { "evil": "x" } }),
+    });
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.parse(res.body).error, /not a writable setting|unknown/i);
   } finally {
     handle.sqlite.close();
     fs.rmSync(dir, { recursive: true, force: true });

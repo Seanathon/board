@@ -19,6 +19,7 @@ import { enqueueWrite, enqueueTransaction, reconcileInterruptedItems } from "./d
 import { eq } from "drizzle-orm";
 import { validateDescriptorProposal } from "./descriptor/guardrails.js";
 import { patchItemFields, deleteItemWithAssets } from "./db/item-actions.js";
+import { uploadAssetForItem } from "./capture/manual-upload.js";
 import { listBoardItemsForUi, getItemForUi } from "./db/hydrate.js";
 import { renameBoard, deleteBoardCascade } from "./db/board-actions.js";
 import { boards as boardsTable } from "./db/schema.js";
@@ -31,6 +32,11 @@ import { buildCtx, type JobQueue, type LLMProvider, type Logger } from "./skills
 import { selectProvider, describeProvider } from "./llm/select-provider.js";
 import { disabledLlm } from "./skills/types.js";
 import { startSseStream } from "./sse.js";
+import { pipeline } from "node:stream/promises";
+import { createArchiveStream, extractArchive } from "./db/archive.js";
+import { getAllSettings, setSetting } from "./db/settings.js";
+import { DEFAULT_INSPIRATION_PROMPT } from "./add.js";
+import { importDocumentSkill } from "./skills/import-document.js";
 import { registerV1Api, sha256Hex } from "./api/v1.js";
 import { buildBookmarklet, TOKEN_PLACEHOLDER } from "./capture-clients/bookmarklet.js";
 import { captureRegistry, registerAllCaptureAdapters } from "./capture/adapter.js";
@@ -256,51 +262,32 @@ async function handleRefetchItem(
   return spawnAddItem({ cid, url: item.url as string, updateId: itemId, instructions: body.instructions, analysisAgent }, reply);
 }
 
-// Shared handler: upload screenshot (visual collections only)
-function handleScreenshot(
-  cid: string,
+// Shared handler: manual image upload (the graceful escape hatch when auto-capture
+// fails — e.g. an og:image fetch came back empty). SQLite-backed via the upload-asset
+// path (capture/manual-upload), so it works for EVERY board, including composed ones
+// (the legacy JSON handler only knew the three seeded boards and 400'd on a composed
+// board id). Board-mode-agnostic by design: a readable/list item can also receive an
+// uploaded image, so there is no "visual collections only" guard here.
+async function handleScreenshot(
+  handle: DbHandle,
   itemId: string,
   body: { dataUrl?: string },
   reply: FastifyReply,
   screenshotsDir: string
-): Record<string, unknown> | { error: string } | null {
-  const col = resolveCollection(cid, reply);
-  if (!col) return { error: `Unknown collection: "${cid}"` };
+): Promise<Record<string, unknown> | { error: string } | null> {
+  const dataUrl = body?.dataUrl;
+  if (!dataUrl) { reply.status(400); return { error: "dataUrl is required" }; }
+  if (!getItemForUi(handle, itemId)) { reply.status(404); return { error: "Not found" }; }
 
-  if (col.view !== "grid") {
+  try {
+    await uploadAssetForItem(handle, { itemId, dataUrl, screenshotsDir });
+  } catch (err) {
+    // Bad/oversized data URL → client error. (Unknown item is already 404'd above.)
     reply.status(400);
-    return { error: "screenshots not supported for this collection" };
+    return { error: (err as Error).message };
   }
 
-  const { dataUrl } = body;
-  if (!dataUrl) { reply.status(400); return { error: "dataUrl is required" }; }
-
-  const m = /^data:image\/[^;]+;base64,(.+)$/.exec(dataUrl);
-  if (!m) { reply.status(400); return { error: "Invalid dataUrl" }; }
-  const buf = Buffer.from(m[1], "base64");
-
-  const updated = mutateCollection<Record<string, unknown>, Record<string, unknown> | undefined>(
-    col.id,
-    (items) => {
-      const idx = items.findIndex((b) => b.id === itemId);
-      if (idx === -1) return undefined;
-
-      const relPath = (items[idx].screenshot as string | null) ?? `screenshots/${itemId}.png`;
-      // Story 2.2: write under DATA_DIR/screenshots (by basename), not the app tree.
-      const absPath = path.join(screenshotsDir, path.basename(relPath));
-      fs.mkdirSync(path.dirname(absPath), { recursive: true });
-      fs.writeFileSync(absPath, buf);
-
-      if (!items[idx].screenshot) {
-        items[idx] = { ...items[idx], screenshot: relPath };
-      }
-
-      return items[idx];
-    }
-  );
-
-  if (!updated) { reply.status(404); return { error: "Not found" }; }
-  return updated;
+  return getItemForUi(handle, itemId) ?? null;
 }
 
 // --- Server factory ---
@@ -384,6 +371,85 @@ export async function buildServer(opts: BuildServerOptions = {}) {
       ext === ".webp" ? "image/webp" : "application/octet-stream";
     reply.type(type);
     return reply.send(fs.createReadStream(abs));
+  });
+
+  // --- Settings: runtime-editable config (the analysis lens) ---
+  // The store is a generic key/value table; this route is NOT. Only prompts may be
+  // written, so an open PATCH can't scribble arbitrary keys into the same file the
+  // collection lives in.
+  const WRITABLE_SETTING = /^[a-z0-9-]+\.system_prompt$/;
+
+  app.get("/api/settings", async () => ({
+    settings: getAllSettings(opts.db ?? getDb()),
+    // Served so the UI can show the built-in text as placeholder and offer a restore,
+    // instead of making "empty" and "default" look the same.
+    defaults: { "inspiration.system_prompt": DEFAULT_INSPIRATION_PROMPT },
+  }));
+
+  app.patch<{ Body: { settings?: Record<string, unknown> } }>(
+    "/api/settings",
+    async (req, reply) => {
+      const incoming = req.body?.settings;
+      if (!incoming || typeof incoming !== "object") {
+        reply.status(400);
+        return { error: "settings object required" };
+      }
+      for (const key of Object.keys(incoming)) {
+        if (!WRITABLE_SETTING.test(key)) {
+          reply.status(400);
+          return { error: `"${key}" is not a writable setting` };
+        }
+        if (typeof incoming[key] !== "string") {
+          reply.status(400);
+          return { error: `"${key}" must be a string` };
+        }
+      }
+      const handle = opts.db ?? getDb();
+      for (const [key, value] of Object.entries(incoming)) setSetting(handle, key, value as string);
+      return { settings: getAllSettings(handle) };
+    }
+  );
+
+  // --- Backup: the whole collection as a streamed tar (metadata + image bytes) ---
+  // Named "backup", not "archive": `archive` already means page-snapshot archival here.
+  // Registered in its own plugin scope so the raw-body parser and the large body limit
+  // apply ONLY to the restore route and never loosen the rest of the API.
+  await app.register(async (backupApp) => {
+    // Hand the request stream through untouched — a restore can be hundreds of MB and
+    // must never be buffered into a string.
+    backupApp.addContentTypeParser("application/x-tar", (_req, payload, done) => {
+      done(null, payload);
+    });
+
+    backupApp.get("/api/backup", async (_req, reply) => {
+      const stamp = new Date().toISOString().slice(0, 10);
+      reply.header("Content-Type", "application/x-tar");
+      reply.header("Content-Disposition", `attachment; filename="board-backup-${stamp}.tar"`);
+      return reply.send(createArchiveStream(opts.db ?? getDb(), screenshotsDir));
+    });
+
+    backupApp.post(
+      "/api/backup",
+      // A restore is inherently large; the global 20MB limit would reject a real one.
+      { bodyLimit: 4 * 1024 * 1024 * 1024 },
+      async (req, reply) => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "board-restore-"));
+        const tmpTar = path.join(tmpDir, "upload.tar");
+        try {
+          await pipeline(req.body as NodeJS.ReadableStream, fs.createWriteStream(tmpTar));
+          const { document, filesRestored } = await extractArchive(tmpTar, screenshotsDir);
+          const handle = opts.db ?? getDb();
+          const ctx = buildCtx({ db: handle, queue, logger, llm });
+          const result = await importDocumentSkill.run({ document }, ctx);
+          return { ...result, filesRestored };
+        } catch (err) {
+          reply.status(400);
+          return { error: (err as Error).message };
+        } finally {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+      },
+    );
   });
 
   // Story 5.3: live status stream (native SSE; poll fallback is the items API).
@@ -737,11 +803,10 @@ t.addEventListener('input',upd);upd();
     }
   );
 
-  // Manual screenshot upload stays on the legacy handler for now (the upload-asset
-  // skill is the SQLite path; wiring the UI's replace-screenshot to it is a follow-up).
+  // Manual image upload → SQLite asset (works for composed boards too).
   app.post<{ Params: { cid: string; id: string }; Body: { dataUrl?: string } }>(
     "/api/collections/:cid/items/:id/screenshot",
-    async (req, reply) => handleScreenshot(req.params.cid, req.params.id, req.body, reply, screenshotsDir)
+    async (req, reply) => handleScreenshot(opts.db ?? getDb(), req.params.id, req.body, reply, screenshotsDir)
   );
 
   // --- Legacy aliases (delegate to collection handlers with cid="inspiration") ---
@@ -770,7 +835,7 @@ t.addEventListener('input',upd);upd();
 
   app.post<{ Params: { id: string }; Body: { dataUrl?: string } }>(
     "/api/bookmarks/:id/screenshot",
-    async (req, reply) => handleScreenshot("inspiration", req.params.id, req.body, reply, screenshotsDir)
+    async (req, reply) => handleScreenshot(opts.db ?? getDb(), req.params.id, req.body, reply, screenshotsDir)
   );
 
   // --- Story 3.2: the ONE generic skill-invocation route (AD11/FR-19) ---

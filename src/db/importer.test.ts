@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { eq } from 'drizzle-orm';
 
 import { initDb } from './index.js';
-import { items, assets } from './schema.js';
+import { items, assets, boards } from './schema.js';
 import { seed, INSPIRATION_BOARD_ID, LIBRARY_BOARD_ID } from './seed.js';
 import { importFlatJson, importRecords } from './importer.js';
 
@@ -132,5 +132,119 @@ describe('importer graceful absence (Story 1.5)', () => {
     assert.equal(handle.db.select().from(items).all().length, 0);
     handle.sqlite.close();
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// An imported record arrives with its enrichment already done (it was enriched in the
+// JSON era), but `status` was never set, so it defaulted to 'pending' and stayed
+// there forever. That left 150 fully-populated items indistinguishable from items
+// still being captured, which is the signal the loading UI keys off.
+describe('imported item status', () => {
+  it('stores an already-enriched record as done, not pending', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-oss-import-status-'));
+    const handle = initDb(join(dir, 'c.db'));
+    try {
+      seed(handle.db);
+      await importRecords({
+        handle,
+        boardId: INSPIRATION_BOARD_ID,
+        records: [{
+          id: 'imported-1',
+          url: 'https://example.com',
+          title: 'Enriched Already',
+          meta: { tier: 'reference', tags: ['dark-theme'], audience: 'developer' },
+          design: { steal_this: 'Do the thing' },
+        }],
+      });
+      const row = handle.db.select().from(items).where(eq(items.id, 'imported-1')).get();
+      assert.equal(row?.status, 'done', 'an already-enriched import must not sit at pending');
+    } finally {
+      handle.sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Library enrichment lives under a different set of keys than Inspiration's
+  // meta.*/design.* — a predicate that only knows one board's shape leaves the other
+  // board's items stranded at 'pending'.
+  it('recognises library-shaped enrichment too, not just the inspiration shape', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-oss-import-lib-status-'));
+    const handle = initDb(join(dir, 'c.db'));
+    try {
+      seed(handle.db);
+      await importRecords({
+        handle,
+        boardId: LIBRARY_BOARD_ID,
+        records: [{
+          id: 'lib-1',
+          url: 'https://arxiv.org/abs/1',
+          title: 'A Paper',
+          summary: 'It compresses reasoning traces.',
+          topics: ['llm', 'compression'],
+          type: 'paper',
+        }],
+      });
+      const row = handle.db.select().from(items).where(eq(items.id, 'lib-1')).get();
+      assert.equal(row?.status, 'done', 'an enriched library import must not sit at pending');
+    } finally {
+      handle.sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// A composed board has no hand-written mapper, so importRecords used to throw
+// `No importer mapping registered` — meaning export emitted boards that nothing
+// could read back. The generic mapper is the inverse of export's toRecord: system
+// columns are lifted, and any nested group is re-flattened to dotted field keys.
+describe('generic mapper (any board, not just the seeded two)', () => {
+  it('round-trips an exported record into a composed board', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-oss-generic-map-'));
+    const handle = initDb(join(dir, 'c.db'));
+    try {
+      seed(handle.db);
+      handle.db.insert(boards).values({
+        id: 'wishlist', name: 'Wish List', view: 'grid',
+        descriptor: { name: 'Wish List', fields: [], view: 'grid', ingest_mode: 'url-screenshot' } as never,
+      }).run();
+
+      await importRecords({
+        handle,
+        boardId: 'wishlist',
+        records: [{
+          id: 'w1',
+          url: 'https://example.com/thing',
+          title: 'A Thing',
+          favorite: true,
+          notes: 'mine',
+          added: '2026-01-02T00:00:00.000Z',
+          analysis_agent: 'claude',
+          screenshot: 'screenshots/w1.png',
+          gift: { price: 42, store: 'somewhere' },
+          priority: 'high',
+        }],
+      });
+
+      const row = handle.db.select().from(items).where(eq(items.id, 'w1')).get();
+      assert.ok(row, 'the item must be created on a board with no hand-written mapper');
+      assert.equal(row.title, 'A Thing');
+      assert.equal(row.source, 'https://example.com/thing');
+      assert.equal(row.favorite, 1);
+      assert.equal(row.notes, 'mine');
+      assert.equal(row.analysisProvider, 'claude');
+      const f = row.fields as Record<string, unknown>;
+      assert.equal(f['gift.price'], 42, 'nested groups re-flatten to dotted keys');
+      assert.equal(f['gift.store'], 'somewhere');
+      assert.equal(f['priority'], 'high', 'top-level custom fields survive');
+      assert.equal(f['url'], undefined, 'system columns must not leak into fields');
+      assert.equal(f['screenshot'], undefined);
+
+      const shots = handle.db.select().from(assets).where(eq(assets.itemId, 'w1')).all();
+      assert.equal(shots.length, 1, 'the screenshot asset is recreated');
+      assert.equal(shots[0].path, 'screenshots/w1.png');
+    } finally {
+      handle.sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

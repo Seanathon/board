@@ -847,6 +847,79 @@
       .empty-cta { transition: none; }
     }
 
+    /* ── Data / config affordance ──
+       A single always-available way back to the guide, and to the two operations that
+       have no other home: getting the collection out, and putting it back. Kept small
+       and low-contrast because the board is the hero — this is a door, not a feature. */
+    .data-fab {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      z-index: 45;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-3);
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s, transform 0.15s;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+    }
+    .data-fab:hover { color: var(--text); border-color: var(--border-hover); transform: translateY(-1px); }
+    .data-fab svg { width: 16px; height: 16px; }
+    /* The AI nudge shares this corner; stack it above rather than under the button. */
+    #ai-nudge { bottom: 64px !important; }
+
+    /* ── Data panel ── */
+    .data-block { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); }
+    .data-block:first-child { margin-top: 8px; padding-top: 0; border-top: none; }
+    .data-block h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--text); }
+    .data-block p { margin: 0 0 12px; font-size: 13px; line-height: 1.55; color: var(--text-2); }
+    .data-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .data-note { font-size: 12px; color: var(--text-3); line-height: 1.5; }
+    .data-file { font-size: 12px; color: var(--text-2); }
+
+    /* A file input cannot be styled, so the real control is visually hidden and a
+       label carries the button vocabulary. Hidden by clipping, NOT display:none —
+       the latter drops it out of the tab order and makes the control unreachable by
+       keyboard. The focus ring is forwarded from the input to the label. */
+    .file-pick input[type="file"] {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .file-pick label { display: inline-block; }
+    .file-pick input[type="file"]:focus-visible + label {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* The one destructive path in the app. It stays visually quiet until armed, then
+       states the consequence in plain words and demands a typed confirmation — a
+       checkbox alone is too easy to tick past. */
+    .danger-arm { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--text-2); }
+    .danger-arm input { margin-top: 3px; flex: none; }
+    .danger-zone {
+      margin-top: 12px;
+      padding: 14px 16px;
+      border: 1px solid rgba(248, 113, 113, 0.35);
+      border-radius: var(--radius-sm);
+      background: rgba(248, 113, 113, 0.06);
+    }
+    .danger-zone h5 { margin: 0 0 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #f87171; }
+    .danger-zone p { margin: 0 0 10px; font-size: 13px; color: var(--text-2); }
+    .danger-zone input[type="text"] { width: 160px; }
+    .btn-danger { background: #b91c1c; color: #fff; border: none; }
+    .btn-danger:disabled { background: var(--surface-2); color: var(--text-3); cursor: default; }
+
     /* ── Welcome / "where to begin" guide (opened from the empty state) ── */
     .modal.modal--welcome { max-width: 600px; }
     .welcome { padding: 36px 40px 30px; }
@@ -940,6 +1013,85 @@
       justify-content: center;
       color: var(--text-3);
       font-size: 12px;
+    }
+
+    /* --- Capture lifecycle: in-flight and failed cards ---
+       The skeleton ghosts THIS card's real geometry (image box, title line, badge,
+       steal line, tag row) at true size, so nothing shifts when real content lands and
+       the card visibly assembles in the order data arrives. A generic shimmer
+       rectangle would say only "something is loading"; this says what is still
+       missing. Motion is a slow staggered breathe, not a sweep. */
+    .ghost-bar {
+      background: var(--surface-2);
+      border-radius: 3px;
+      height: 9px;
+      animation: ghost-breathe 1.9s ease-in-out infinite;
+    }
+    .ghost-image {
+      width: 100%;
+      height: 200px;
+      background: var(--surface-2);
+      display: flex;
+      align-items: flex-end;
+      padding: 12px 14px;
+      box-sizing: border-box;
+      animation: ghost-breathe 1.9s ease-in-out infinite;
+    }
+    /* Two lines at the .card-steal cadence (12px text, 1.4 line-height, two-line
+       clamp), so the ghost occupies the height the description will. */
+    .ghost-steal { display: flex; flex-direction: column; gap: 7px; margin-bottom: 11px; }
+    .ghost-steal .ghost-bar { height: 10px; }
+    /* Pills at .tag's real height and radius, wrapping the same way. */
+    .ghost-tags .ghost-bar { height: 18px; border-radius: 20px; }
+    .ghost-badge { width: 56px; height: 17px; border-radius: 4px; flex-shrink: 0; }
+    @keyframes ghost-breathe {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.42; }
+    }
+
+    /* The state word. Never color alone: the dot is an accompaniment to the label,
+       never the signal itself. */
+    .card-state {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      color: var(--text-2);
+    }
+    .card-state-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex: none;
+      animation: ghost-breathe 1.9s ease-in-out infinite;
+    }
+    .card-state.is-failed { color: var(--text-2); }
+    .card-state.is-failed .card-state-dot { background: #f87171; animation: none; }
+
+    .card-retry {
+      font-size: 11px;
+      color: var(--accent);
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .card-retry:disabled { color: var(--text-3); cursor: default; text-decoration: none; }
+
+    /* An in-flight card is not yet judgeable, so it stays quiet: no hover lift, no
+       cursor glow competing with the fill. */
+    .grid-card.is-inflight, .list-card.is-inflight, .lib-card.is-inflight { cursor: default; }
+    .grid-card.is-inflight:hover { transform: none; box-shadow: none; }
+    .grid-card.is-inflight::after, .list-card.is-inflight::after, .lib-card.is-inflight::after { display: none; }
+
+    /* Reduced motion: a real static path, not a disabled animation. The ghosts hold a
+       fixed dimmed opacity and content swaps in without transition. */
+    @media (prefers-reduced-motion: reduce) {
+      .ghost-bar, .ghost-image, .card-state-dot { animation: none; opacity: 0.6; }
     }
 
     /* Library/text-board grid tile: no screenshot, scales to text fields. */
@@ -1325,6 +1477,30 @@
 
     .design-field { }
 
+    /* Section heading for a group of enriched fields (the dotted prefix: meta,
+       design, reflection). It had no rule at all and rendered as body text, so a
+       group name read like a stray word above the grid. It sits one level above
+       .field-label: brighter and wider-tracked, with a hairline rule carrying the
+       eye across the column break. The rule is what separates the two levels, so
+       both can stay small and uppercase without competing. */
+    .field-group-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 28px 0 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-2);
+    }
+    .field-group-label::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
     .field-label {
       font-size: 10px;
       font-weight: 600;
@@ -1370,6 +1546,15 @@
       transition: border-color 0.15s;
     }
     textarea.reflection-input { resize: vertical; min-height: 60px; }
+    /* Must sit AFTER textarea.reflection-input: same specificity, so source order is
+       what decides. Placed earlier it lost, and the editor collapsed to the two-row
+       box this exists to replace. */
+    textarea.prompt-editor {
+      min-height: 260px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
     select.reflection-input {
       cursor: pointer;
       appearance: none;
@@ -1791,6 +1976,45 @@ LLM_API_KEY=sk-…</pre>
   let statusSource = null;
   let subscribedCid = null;
   let statusReloadPending = false;
+
+  /**
+   * Fold one SSE transition into the in-memory item and re-render.
+   * @returns {boolean} true when the item was known and handled locally.
+   */
+  function applyStatusEvent(event) {
+    if (!event || !event.itemId) return false;
+    const item = bookmarks.find(b => b.id === event.itemId);
+    if (!item) return false;
+
+    if (event.status === 'captured') {
+      // Not a lifecycle transition: the row still reads `processing`. Only the newly
+      // captured page is applied, so the card keeps its skeleton for the AI fields.
+      if (event.title) item.title = event.title;
+      if (event.screenshot) { item.screenshot = event.screenshot; item._cacheBust = Date.now(); }
+    } else {
+      item.status = event.status;
+      if (event.error_reason !== undefined) item.error_reason = event.error_reason;
+      else delete item.error_reason;
+      if (event.fields && typeof event.fields === 'object') {
+        // `fields` arrives flat and dotted ("meta.tier"); the renderers read it nested.
+        for (const [key, value] of Object.entries(event.fields)) {
+          const dot = key.indexOf('.');
+          if (dot > 0) {
+            const group = key.slice(0, dot);
+            item[group] = { ...(item[group] || {}), [key.slice(dot + 1)]: value };
+          } else {
+            item[key] = value;
+          }
+        }
+      }
+    }
+    // A finished item can change the facet vocabulary, so refresh the clouds too.
+    if (event.status === 'done') {
+      if (activeCollection === 'inspiration') buildTagCloud(); else renderLibraryTopicCloud();
+    }
+    applyFilters();
+    return true;
+  }
   function subscribeToStatus() {
     if (typeof EventSource === 'undefined') return;
     if (statusSource && subscribedCid === activeCollection) return;
@@ -1798,7 +2022,16 @@ LLM_API_KEY=sk-…</pre>
       if (statusSource) statusSource.close();
       subscribedCid = activeCollection;
       statusSource = new EventSource(window.collectionHelpers.eventsUrl(activeCollection));
-      statusSource.addEventListener('status', () => {
+      statusSource.addEventListener('status', (e) => {
+        // Merge the transition into the card in place. A full load() would discard
+        // scroll position and any open popover on every hop of a capture, and the
+        // `captured` event carries exactly what the card needs to fill its image and
+        // title while the AI read is still running.
+        let event;
+        try { event = JSON.parse(e.data); } catch { return; }
+        if (applyStatusEvent(event)) return;
+        // An event for an item this client has never seen (added from the extension,
+        // the share target, or another tab) — fall back to a debounced board refetch.
         if (statusReloadPending) return;
         statusReloadPending = true;
         setTimeout(() => { statusReloadPending = false; load(); }, 200);
@@ -1967,7 +2200,7 @@ LLM_API_KEY=sk-…</pre>
         </div>
 
         <div class="field-label" style="margin-top:12px">Enrichment prompt (the AI lens for this board)</div>
-        <textarea id="edit-board-prompt" class="reflection-input" rows="2" placeholder="How should the AI analyze each item?">${esc(d.enrichment_prompt || '')}</textarea>
+        <textarea id="edit-board-prompt" class="reflection-input" rows="8" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;resize:vertical" placeholder="How should the AI analyze each item?">${esc(d.enrichment_prompt || '')}</textarea>
 
         <div class="field-label" style="margin-top:16px">Fields <span style="color:var(--text-3);font-weight:400">— check AI to let enrichment fill it; description guides the AI</span></div>
         <div id="board-fields-container">
@@ -2300,6 +2533,11 @@ LLM_API_KEY=sk-…</pre>
     const anyActive = !!(q || audience || form || domain || activeTiers.size || showFavoritesOnly || activeTag || libraryTopicFilter || libraryTypeFilter || facetActive);
     document.getElementById('clear-filters-btn').classList.toggle('visible', anyActive);
 
+    // An item still being captured has no facets to match on yet, so every active
+    // filter would drop it and the card the user just created would never appear.
+    // It stays visible until it has been read and can be judged on its merits.
+    const inFlight = (b) => window.collectionHelpers.isInFlight(b);
+
     const activeColObj = collections.find(c => c.id === activeCollection);
     const isCustomBoard = !!activeColObj && !['inspiration', 'library', 'inbox'].includes(activeColObj.id);
 
@@ -2311,6 +2549,10 @@ LLM_API_KEY=sk-…</pre>
       if (activeTag && activeTagField) activeFilters[activeTagField] = activeTag;
       const descriptor = activeColObj.descriptor;
       filtered = bookmarks.filter(b => {
+        // Same reasoning as the seeded boards below: a composed board's descriptor
+        // facets are exactly the fields enrichment has not filled yet, so an in-flight
+        // item matches nothing and would vanish from the board it was just added to.
+        if (inFlight(b)) return true;
         if (!window.collectionHelpers.matchesFilters(b, activeFilters, descriptor)) return false;
         if (q) {
           const parts = [b.title, b.url];
@@ -2324,10 +2566,11 @@ LLM_API_KEY=sk-…</pre>
       });
     } else if (activeCollection !== 'inspiration') {
       filtered = bookmarks.filter(b =>
-        window.collectionHelpers.matchesLibraryFilters(b, { q, topic: libraryTopicFilter, type: libraryTypeFilter })
+        inFlight(b) || window.collectionHelpers.matchesLibraryFilters(b, { q, topic: libraryTopicFilter, type: libraryTypeFilter })
       );
     } else {
       filtered = bookmarks.filter(b => {
+        if (inFlight(b)) return true;
         if (showFavoritesOnly && !b.favorite) return false;
         if (audience && b.meta?.audience !== audience) return false;
         if (form && b.meta?.form !== form) return false;
@@ -2378,28 +2621,115 @@ LLM_API_KEY=sk-…</pre>
 
   const HEART_SVG = `<svg viewBox="0 0 16 16"><path class="heart-outline" d="M8 13.5S2 9.5 2 5.5A3 3 0 0 1 8 4a3 3 0 0 1 6 1.5C14 9.5 8 13.5 8 13.5Z"/></svg>`;
 
+  // --- Capture lifecycle rendering ---
+  // State comes from one tested helper (collections-ui.itemRenderState) so the card,
+  // the list row and the modal can never disagree about what an item is doing.
+
+  const STATE_LABEL = { capturing: 'Capturing the page', reading: 'Reading it' };
+
+  function stateOf(b) { return window.collectionHelpers.itemRenderState(b); }
+
+  /** A ghost line at a given width; the stagger makes the card breathe as a unit. */
+  function ghostBar(width, delay = 0) {
+    return `<div class="ghost-bar" style="width:${width};animation-delay:${delay}ms"></div>`;
+  }
+
+  /** The status line shown where the AI takeaway will eventually sit. */
+  function stateNote(b, state) {
+    if (state === 'failed') {
+      // Never the raw reason: safeErrorReason allowlists the known user-safe set so a
+      // stack or a secret-bearing string can't reach a card.
+      const reason = window.collectionHelpers.safeErrorReason(b);
+      return `<div class="card-state is-failed"><span class="card-state-dot"></span>`
+        + `<span>${esc(reason.charAt(0).toUpperCase() + reason.slice(1))}.</span>`
+        + `<button class="card-retry" data-retry-id="${esc(b.id)}">Try again</button></div>`;
+    }
+    return `<div class="card-state"><span class="card-state-dot"></span><span>${STATE_LABEL[state]}</span></div>`;
+  }
+
+  /**
+   * Ghosted stand-ins for the fields enrichment has not filled yet, cut to the real
+   * card's geometry: two lines at the .card-steal cadence (12px/1.4, clamped to two)
+   * and a wrapping row of tag pills at .tag's height and radius. Widths vary so the
+   * block reads as text and tags rather than as a progress bar.
+   */
+  const GHOST_TAG_WIDTHS = ['74px', '56px', '88px', '62px', '48px', '80px'];
+
+  function ghostBody() {
+    return `<div class="ghost-steal">${ghostBar('100%', 0)}${ghostBar('68%', 80)}</div>`
+      + `<div class="card-tags ghost-tags">`
+      + GHOST_TAG_WIDTHS.map((w, i) => ghostBar(w, 140 + i * 55)).join('')
+      + `</div>`;
+  }
+
+  /** Wire the retry buttons a failed card renders. */
+  function bindRetryButtons(root) {
+    root.querySelectorAll('.card-retry').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        retryItem(btn.dataset.retryId, btn);
+      });
+    });
+  }
+
+  /**
+   * Re-run capture + enrichment for a failed item via the existing refetch route.
+   * The card returns to its in-flight state immediately; SSE drives it from there.
+   */
+  async function retryItem(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Retrying…'; }
+    const item = bookmarks.find(b => b.id === id);
+    if (item) { item.status = 'processing'; delete item.error_reason; applyFilters(); }
+    try {
+      const res = await fetch(window.collectionHelpers.refetchUrl(activeCollection, id), { method: 'POST' });
+      if (!res.ok) throw new Error('refetch failed');
+    } catch {
+      if (item) { item.status = 'error'; item.error_reason = 'could not start a retry'; applyFilters(); }
+    }
+  }
+
+
   function renderGrid() {
     const el = document.getElementById('grid-view');
     if (!filtered.length) { el.innerHTML = emptyState(bookmarks.length > 0); return; }
-    el.innerHTML = filtered.map(b => `
-      <div class="grid-card" data-id="${b.id}" style="position:relative">
-        ${b.screenshot
-          ? `<img class="card-screenshot" src="${shotSrc(b)}" alt="${esc(b.title)}" loading="lazy" />`
-          : `<div class="card-no-screenshot">No image</div>`}
+    el.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      // The image and title are whatever capture has already produced: at `reading`
+      // they are real and only the AI read is still ghosted, so the card fills in the
+      // order the data actually arrives instead of flipping from blank to complete.
+      const image = b.screenshot
+        ? `<img class="card-screenshot" src="${shotSrc(b)}" alt="${esc(b.title)}" loading="lazy" />`
+        : inFlight
+          ? `<div class="ghost-image"></div>`
+          : `<div class="card-no-screenshot">No image</div>`;
+      const title = b.title
+        ? `<div class="card-title">${esc(b.title)}</div>`
+        : `<div class="card-title" style="flex:1">${ghostBar('72%')}</div>`;
+      const badge = state === 'ready'
+        ? `<span class="tier-badge ${b.meta?.tier}">${TIER_LABELS[b.meta?.tier] || b.meta?.tier || ''}</span>`
+        : inFlight ? `<span class="ghost-bar ghost-badge"></span>` : '';
+      const body = state === 'ready'
+        ? `<div class="card-steal">${esc(b.design?.steal_this || '')}</div>
+          <div class="card-tags">
+            ${(b.meta?.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}
+          </div>`
+        : `${stateNote(b, state)}${inFlight ? ghostBody() : ''}`;
+      return `
+      <div class="grid-card${inFlight ? ' is-inflight' : ''}" data-id="${b.id}" style="position:relative">
+        ${image}
         <button class="fav-btn${b.favorite ? ' active' : ''}" data-id="${b.id}" title="${b.favorite ? 'Unfavorite' : 'Favorite'}">${HEART_SVG}</button>
         <button class="more-btn" data-id="${b.id}" title="More">···</button>
         <div class="card-body">
           <div class="card-header">
-            <div class="card-title">${esc(b.title)}</div>
-            <span class="tier-badge ${b.meta?.tier}">${TIER_LABELS[b.meta?.tier] || b.meta?.tier || ''}</span>
+            ${title}
+            ${badge}
           </div>
-          <div class="card-steal">${esc(b.design?.steal_this || '')}</div>
-          <div class="card-tags">
-            ${(b.meta?.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}
-          </div>
+          ${body}
         </div>
       </div>
-    `).join('');
+    `;}).join('');
+    bindRetryButtons(el);
     el.querySelectorAll('.grid-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (!e.target.closest('.fav-btn')) openModal(card.dataset.id);
@@ -2416,8 +2746,11 @@ LLM_API_KEY=sk-…</pre>
   function renderList() {
     const el = document.getElementById('list-view');
     if (!filtered.length) { el.innerHTML = emptyState(bookmarks.length > 0); return; }
-    el.innerHTML = filtered.map(b => `
-      <div class="list-card" data-id="${b.id}">
+    el.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      return `
+      <div class="list-card${inFlight ? ' is-inflight' : ''}" data-id="${b.id}">
         <div style="display:flex;align-items:center;gap:8px">
           ${b.favorite ? `<div class="list-fav-dot" title="${esc(b.favorite_reason || 'Favorited')}"></div>` : '<div style="width:7px"></div>'}
           ${b.screenshot
@@ -2426,11 +2759,13 @@ LLM_API_KEY=sk-…</pre>
         </div>
         <div class="list-meta">
           <div>
-            <div class="list-name">${esc(b.title)}</div>
+            <div class="list-name">${b.title ? esc(b.title) : ghostBar('160px')}</div>
             <div class="list-url">${esc(hostname(b.url))}</div>
             <div class="list-category">${esc([b.meta?.audience, b.meta?.form, b.meta?.domain].filter(Boolean).join(' · '))} · ${b.meta?.tone?.join(', ') || ''}</div>
           </div>
-          <div class="list-steal">${esc(b.design?.steal_this || '')}</div>
+          ${state === 'ready'
+            ? `<div class="list-steal">${esc(b.design?.steal_this || '')}</div>`
+            : `<div class="list-steal">${stateNote(b, state)}</div>`}
           <div>
             <span class="tier-badge ${b.meta?.tier}">${TIER_LABELS[b.meta?.tier] || ''}</span>
           </div>
@@ -2442,7 +2777,8 @@ LLM_API_KEY=sk-…</pre>
           <button class="more-btn-list" data-id="${b.id}" title="More">···</button>
         </div>
       </div>
-    `).join('');
+    `;}).join('');
+    bindRetryButtons(el);
     el.querySelectorAll('.list-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (!e.target.closest('.more-btn-list')) openModal(card.dataset.id);
@@ -2459,8 +2795,11 @@ LLM_API_KEY=sk-…</pre>
     gridEl.style.display = 'none';
     listEl.style.display = 'block';
     if (!filtered.length) { listEl.innerHTML = emptyState(bookmarks.length > 0); return; }
-    listEl.innerHTML = filtered.map(b => `
-      <article class="lib-card" data-id="${b.id}">
+    listEl.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      return `
+      <article class="lib-card${inFlight ? ' is-inflight' : ''}" data-id="${b.id}">
         <button class="more-btn-list" data-id="${b.id}" title="More">···</button>
         <div class="lib-headline">
           <a class="lib-title" href="${esc(b.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(b.title || b.url)}</a>
@@ -2470,10 +2809,13 @@ LLM_API_KEY=sk-…</pre>
             ${b.author ? `<span class="lib-author">${esc(b.author)}</span>` : ''}
           </div>
         </div>
-        ${b.summary ? `<p class="lib-summary">${esc(b.summary)}</p>` : ''}
-        ${b.topics?.length ? `<div class="lib-topics">${b.topics.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+        ${state === 'ready'
+          ? `${b.summary ? `<p class="lib-summary">${esc(b.summary)}</p>` : ''}
+             ${b.topics?.length ? `<div class="lib-topics">${b.topics.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}`
+          : `${stateNote(b, state)}${inFlight ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${ghostBar('100%')}${ghostBar('88%', 90)}${ghostBar('42%', 180)}</div>` : ''}`}
       </article>
-    `).join('');
+    `;}).join('');
+    bindRetryButtons(listEl);
     listEl.querySelectorAll('.lib-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (!e.target.closest('.more-btn-list')) openLibraryModal(card.dataset.id);
@@ -2493,8 +2835,11 @@ LLM_API_KEY=sk-…</pre>
     listEl.style.display = 'none';
     gridEl.style.display = '';
     if (!filtered.length) { gridEl.innerHTML = emptyState(bookmarks.length > 0); return; }
-    gridEl.innerHTML = filtered.map(b => `
-      <div class="grid-card lib-grid-card" data-id="${b.id}">
+    gridEl.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      return `
+      <div class="grid-card lib-grid-card${inFlight ? ' is-inflight' : ''}" data-id="${b.id}">
         <button class="more-btn-list" data-id="${b.id}" title="More">···</button>
         <div class="card-body">
           <div class="card-header">
@@ -2502,11 +2847,14 @@ LLM_API_KEY=sk-…</pre>
             ${b.type ? `<span class="lib-type">${esc(b.type)}</span>` : ''}
           </div>
           <div class="lib-grid-host">${esc(hostname(b.url))}${b.author ? ` · ${esc(b.author)}` : ''}</div>
-          ${b.summary ? `<p class="lib-grid-summary">${esc(b.summary)}</p>` : ''}
-          ${b.topics?.length ? `<div class="lib-topics">${b.topics.slice(0, 6).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+          ${state === 'ready'
+            ? `${b.summary ? `<p class="lib-grid-summary">${esc(b.summary)}</p>` : ''}
+               ${b.topics?.length ? `<div class="lib-topics">${b.topics.slice(0, 6).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}`
+            : `${stateNote(b, state)}${inFlight ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${ghostBar('100%')}${ghostBar('80%', 90)}${ghostBar('50%', 180)}</div>` : ''}`}
         </div>
       </div>
-    `).join('');
+    `;}).join('');
+    bindRetryButtons(gridEl);
     gridEl.querySelectorAll('.lib-grid-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (!e.target.closest('.more-btn-list')) openLibraryModal(card.dataset.id);
@@ -2600,11 +2948,21 @@ LLM_API_KEY=sk-…</pre>
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(e);
     }
-    const displayHtml = [...groups.entries()].map(([g, es]) => `
-      ${g ? `<div class="field-group-label">${esc(g)}</div>` : ''}
-      <div class="design-grid">
+    // Field groups (the dotted prefix: meta, design, reflection) become tabs rather
+    // than a stack of headings — one group is in view at a time, so a long analysis
+    // stops pushing the rest of the modal off-screen. Falls back to a plain grid when
+    // there is only one group: a lone tab is a heading pretending to be a control.
+    const groupList = [...groups.entries()];
+    const panelId = (g) => g || 'fields';
+    const gridFor = (es) => `<div class="design-grid">
         ${es.map(e => `<div class="design-field"><div class="field-label">${esc(e.field.label)}</div>${rh.renderField ? rh.renderField(e.field, e.value) : `<div class="field-value">${esc(String(e.value))}</div>`}</div>`).join('')}
-      </div>`).join('');
+      </div>`;
+    const displayHtml = groupList.length > 1
+      ? `<div class="modal-tabs" role="tablist">
+          ${groupList.map(([g], i) => `<button class="modal-tab${i === 0 ? ' active' : ''}" data-panel="${esc(panelId(g))}" role="tab" aria-selected="${i === 0}">${esc(g || 'Fields')}</button>`).join('')}
+        </div>
+        ${groupList.map(([g, es], i) => `<div class="modal-panel${i === 0 ? ' active' : ''}" data-panel="${esc(panelId(g))}" role="tabpanel">${gridFor(es)}</div>`).join('')}`
+      : groupList.map(([, es]) => gridFor(es)).join('');
 
     const editInputs = editableFields.map(f => `<div class="reflection-field"><div class="field-label">${esc(f.label)}</div>${modalEditInput(f, ch.getFieldValue ? ch.getFieldValue(item, f.key) : undefined)}</div>`).join('');
     const editSection = `<div class="reflection-grid" style="margin-top:16px">
@@ -2614,6 +2972,10 @@ LLM_API_KEY=sk-…</pre>
 
     const favStar = `<button id="modal-fav" title="Favorite" style="background:none;border:none;cursor:pointer;font-size:22px;line-height:1;color:${item.favorite ? 'var(--accent,#f59e0b)' : 'var(--text-3)'}">${item.favorite ? '★' : '☆'}</button>`;
     const urlSafe = rh.isSafeUrl && rh.isSafeUrl(item.url);
+
+    // An item that is still being read, or that failed, says so here too — otherwise
+    // the modal is a wall of blank fields with no explanation (the reported bug).
+    const modalState = stateOf(item);
 
     const content = document.getElementById('modal-content');
     content.innerHTML = `
@@ -2625,6 +2987,7 @@ LLM_API_KEY=sk-…</pre>
         </div>
         ${item.url ? `<div class="modal-url">${urlSafe ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.url)}</a>` : `<span>${esc(item.url)}</span>`}${item.added ? ` · ${esc(item.added)}` : ''}</div>` : ''}
         ${tagsHtml}
+        ${modalState !== 'ready' ? `<div style="margin:12px 0">${stateNote(item, modalState)}</div>` : ''}
         ${lead ? `<div class="steal-this"><div class="field-label">${esc(lead.field.label)}</div><div class="field-value">${esc(String(lead.value))}</div></div>` : ''}
         ${displayHtml}
         ${editSection}
@@ -2637,6 +3000,18 @@ LLM_API_KEY=sk-…</pre>
     document.getElementById('modal-cancel').onclick = closeModal;
     document.getElementById('modal-save').onclick = () => saveItemEdits(item.id);
     document.getElementById('modal-fav').onclick = () => toggleItemFavorite(item.id);
+    bindRetryButtons(content);
+    content.querySelectorAll('.modal-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.panel;
+        content.querySelectorAll('.modal-tab').forEach(t => {
+          const on = t === tab;
+          t.classList.toggle('active', on);
+          t.setAttribute('aria-selected', String(on));
+        });
+        content.querySelectorAll('.modal-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === target));
+      });
+    });
     document.getElementById('modal-overlay').classList.add('open');
   }
 
@@ -3039,7 +3414,7 @@ LLM_API_KEY=sk-…</pre>
     agentBtn.disabled = true;
     closeAgentMenu();
     status.className = 'add-status';
-    status.textContent = '📸 Capturing…';
+    status.textContent = '';
 
     try {
       const res = await fetch(window.collectionHelpers.addUrl(activeCollection), {
@@ -3055,8 +3430,9 @@ LLM_API_KEY=sk-…</pre>
       }
       bookmarks.unshift(data);
       input.value = '';
-      status.textContent = `✓ Added ${data.title || data.url}`;
-      setTimeout(() => { status.textContent = ''; }, 3000);
+      // The card itself now shows capture progress, so the header stops narrating it;
+      // duplicating the state in two places just makes the chrome louder.
+      status.textContent = '';
       if (activeCollection === 'inspiration') buildTagCloud();
       else renderLibraryTopicCloud();
       applyFilters();
@@ -3432,6 +3808,27 @@ LLM_API_KEY=sk-…</pre>
     if (e.target.closest('[data-welcome-close]')) { closeModal(); return; }
   });
 
+  /**
+   * The one always-available door to the guide and to import/export. The welcome modal
+   * was reachable only from an empty board, which meant that once you had items — the
+   * exact point at which a backup starts to matter — there was no way back to it.
+   */
+  function mountDataFab() {
+    if (document.querySelector('.data-fab')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'data-fab';
+    btn.id = 'data-fab';
+    btn.title = 'Guide, backup and settings';
+    btn.setAttribute('aria-label', 'Guide, backup and settings');
+    btn.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">'
+      + '<path d="M2 4.2c0-.9 2.7-1.7 6-1.7s6 .8 6 1.7-2.7 1.7-6 1.7-6-.8-6-1.7Z"/>'
+      + '<path d="M2 4.2v7.6c0 .9 2.7 1.7 6 1.7s6-.8 6-1.7V4.2"/>'
+      + '<path d="M2 8c0 .9 2.7 1.7 6 1.7s6-.8 6-1.7"/></svg>';
+    btn.addEventListener('click', openWelcomeModal);
+    document.body.appendChild(btn);
+  }
+
   function prefersReducedMotion() {
     return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }
@@ -3454,13 +3851,178 @@ LLM_API_KEY=sk-…</pre>
 
   // The "Where to begin" guide: a short letter from the author + three first steps +
   // a link to the docs. Opened from the empty state's secondary affordance.
+  /** Tabs inside the welcome modal reuse the item modal's tab vocabulary. */
+  function wireWelcomeTabs() {
+    const root = document.getElementById('modal-content');
+    root.querySelectorAll('.modal-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.panel;
+        root.querySelectorAll('.modal-tab').forEach(t => {
+          const on = t === tab;
+          t.classList.toggle('active', on);
+          t.setAttribute('aria-selected', String(on));
+        });
+        root.querySelectorAll('.modal-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === target));
+      });
+    });
+  }
+
+  /** Trigger a browser download of the streamed tar without buffering it in JS. */
+  function downloadBackup() {
+    // A plain navigation lets the browser stream ~100MB straight to disk; fetching it
+    // into a Blob first would hold the whole archive in memory for no reason.
+    const a = document.createElement('a');
+    a.href = '/api/backup';
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function wireDataPanel() {
+    const exportBtn = document.getElementById('data-export');
+    const exportNote = document.getElementById('data-export-note');
+    const fileInput = document.getElementById('data-import-file');
+    const importBtn = document.getElementById('data-import');
+    const importNote = document.getElementById('data-import-note');
+    const fresh = document.getElementById('data-fresh');
+    const danger = document.getElementById('data-danger');
+    const confirmBox = document.getElementById('data-confirm');
+    const wipeBtn = document.getElementById('data-wipe-restore');
+    if (!exportBtn) return;
+
+    exportNote.textContent = `${bookmarks.length} items on this board · every board is included`;
+
+    exportBtn.addEventListener('click', () => {
+      downloadBackup();
+      exportNote.textContent = 'Downloading…';
+      setTimeout(() => { exportNote.textContent = 'Saved to your downloads.'; }, 1500);
+    });
+
+    const importLabel = document.getElementById('data-import-label');
+    fileInput.addEventListener('change', () => {
+      const f = fileInput.files && fileInput.files[0];
+      importBtn.disabled = !f || fresh.checked;
+      // The native control showed the filename itself; the styled label has to say it.
+      importLabel.textContent = f ? 'Choose a different file' : 'Choose a file';
+      importNote.textContent = f ? `${f.name} · ${(f.size / 1048576).toFixed(1)} MB` : '';
+      updateWipeArm();
+    });
+
+    // Arming is two steps on purpose: the checkbox reveals the consequence, and the
+    // typed word confirms it. A checkbox alone is one stray click from data loss.
+    fresh.addEventListener('change', () => {
+      danger.hidden = !fresh.checked;
+      importBtn.disabled = fresh.checked || !(fileInput.files && fileInput.files[0]);
+      updateWipeArm();
+    });
+    confirmBox.addEventListener('input', updateWipeArm);
+
+    function updateWipeArm() {
+      const hasFile = !!(fileInput.files && fileInput.files[0]);
+      wipeBtn.disabled = !(fresh.checked && hasFile && confirmBox.value.trim().toLowerCase() === 'delete');
+    }
+
+    importBtn.addEventListener('click', () => runRestore({ wipeFirst: false }));
+    wipeBtn.addEventListener('click', () => runRestore({ wipeFirst: true }));
+
+    async function runRestore({ wipeFirst }) {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      importBtn.disabled = true;
+      wipeBtn.disabled = true;
+
+      try {
+        if (wipeFirst) {
+          // The backup is not a courtesy: it is the only undo this action has, so it
+          // happens before anything is deleted.
+          importNote.textContent = 'Downloading a backup first…';
+          downloadBackup();
+          await new Promise(r => setTimeout(r, 2500));
+          importNote.textContent = 'Deleting current items…';
+          const wipe = await fetch('/skills/wipe-items', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirm: 'delete' }),
+          });
+          if (!wipe.ok) throw new Error('could not clear the collection');
+        }
+
+        importNote.textContent = 'Restoring…';
+        const res = await fetch('/api/backup', {
+          method: 'POST', headers: { 'Content-Type': 'application/x-tar' }, body: file,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'restore failed');
+
+        importNote.textContent =
+          `Restored ${data.itemsCreated} items and ${data.filesRestored} images`
+          + (data.boardsCreated ? `, ${data.boardsCreated} boards` : '')
+          + (data.itemsSkipped ? ` · ${data.itemsSkipped} already here, left alone` : '')
+          + '.';
+        await load();
+      } catch (err) {
+        importNote.textContent = `Could not restore: ${err.message}`;
+      } finally {
+        importBtn.disabled = !(fileInput.files && fileInput.files[0]) || fresh.checked;
+        updateWipeArm();
+      }
+    }
+  }
+
+  async function wireSystemPanel() {
+    const box = document.getElementById('system-prompt');
+    const note = document.getElementById('system-prompt-note');
+    const saveBtn = document.getElementById('system-prompt-save');
+    const resetBtn = document.getElementById('system-prompt-reset');
+    if (!box) return;
+
+    let builtInDefault = '';
+    try {
+      const data = await fetch('/api/settings').then(r => r.json());
+      builtInDefault = data.defaults['inspiration.system_prompt'] || '';
+      box.value = data.settings['inspiration.system_prompt'] || '';
+      // Showing the default as placeholder keeps "empty" and "default" distinguishable.
+      box.placeholder = builtInDefault;
+    } catch {
+      note.textContent = 'Could not load settings.';
+      return;
+    }
+
+    saveBtn.addEventListener('click', async () => {
+      note.textContent = 'Saving…';
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings: { 'inspiration.system_prompt': box.value } }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'save failed');
+        note.textContent = box.value.trim() ? 'Saved. It applies to the next capture.' : 'Cleared — the built-in lens is back.';
+      } catch (err) {
+        note.textContent = `Could not save: ${err.message}`;
+      }
+    });
+
+    resetBtn.addEventListener('click', () => {
+      box.value = '';
+      note.textContent = 'Cleared. Save to confirm.';
+      box.focus();
+    });
+  }
+
   function openWelcomeModal() {
     showModalContent(`
       <div class="welcome">
         <p class="welcome-eyebrow">Welcome to board</p>
         <h2 class="welcome-title">A collection with a point of view.</h2>
 
-        <div class="welcome-section">
+        <div class="modal-tabs" role="tablist" style="margin-top:22px">
+          <button class="modal-tab active" data-panel="start" role="tab" aria-selected="true">Getting started</button>
+          <button class="modal-tab" data-panel="data" role="tab" aria-selected="false">Your data</button>
+          <button class="modal-tab" data-panel="system" role="tab" aria-selected="false">System</button>
+        </div>
+
+        <div class="modal-panel active" data-panel="start" role="tabpanel">
+        <div class="welcome-section" style="margin-top:6px;padding-top:0;border-top:none">
           <h3>Where to begin</h3>
           <ol class="welcome-steps">
             <li><b>Capture.</b> Paste a URL above, or share to your Inbox from your phone. It lands in the Inbox first.</li>
@@ -3489,12 +4051,73 @@ LLM_API_KEY=sk-…</pre>
           <p class="welcome-sign">Sean, the original creator of Board.</p>
         </div>
 
+        <!-- Scoped to this tab on purpose: "Read the docs" and "Maybe later" are the
+             next steps for someone still deciding, and read as noise beside a prompt
+             editor or a delete confirmation. The modal's own close button serves the
+             other tabs. -->
         <div class="welcome-footer">
           <a class="empty-cta" href="https://github.com/Hayawan/board" target="_blank" rel="noopener">Read the docs on GitHub</a>
           <button type="button" class="empty-link" data-welcome-close>Maybe later</button>
         </div>
+        </div><!-- /start panel -->
+
+        <div class="modal-panel" data-panel="data" role="tabpanel">
+          <div class="data-block">
+            <h4>Take it with you</h4>
+            <p>Everything on every board, plus the images, as one plain <code>.tar</code> file. It opens with ordinary tools, so you can look inside without this app.</p>
+            <div class="data-row">
+              <button type="button" class="btn btn-primary" id="data-export">Download a backup</button>
+              <span class="data-note" id="data-export-note"></span>
+            </div>
+          </div>
+
+          <div class="data-block">
+            <h4>Bring it back</h4>
+            <p>Restore a backup, on this machine or a new one. Anything already here is left untouched: boards keep their own fields, and items you already have are skipped rather than rewritten.</p>
+            <div class="data-row">
+              <span class="file-pick">
+                <input type="file" id="data-import-file" accept=".tar,application/x-tar">
+                <label class="btn btn-ghost" for="data-import-file" id="data-import-label">Choose a file</label>
+              </span>
+              <button type="button" class="btn btn-primary" id="data-import" disabled>Restore</button>
+            </div>
+            <div class="data-note" id="data-import-note" style="margin-top:10px"></div>
+
+            <label class="danger-arm">
+              <input type="checkbox" id="data-fresh">
+              <span>Start from a fresh state — delete what is here first, so the backup is all that remains.</span>
+            </label>
+
+            <div class="danger-zone" id="data-danger" hidden>
+              <h5>This deletes your items</h5>
+              <p id="data-danger-copy">Every item and every image goes. Your boards and the fields you built stay. A backup downloads first.</p>
+              <div class="data-row">
+                <input type="text" id="data-confirm" class="reflection-input" placeholder="type delete" autocomplete="off" spellcheck="false">
+                <button type="button" class="btn btn-danger" id="data-wipe-restore" disabled>Delete and restore</button>
+              </div>
+            </div>
+          </div>
+        </div><!-- /data panel -->
+
+        <div class="modal-panel" data-panel="system" role="tabpanel">
+          <div class="data-block">
+            <h4>The analysis lens</h4>
+            <p>What the AI is told before it looks at anything you save. Rewrite it to match what you actually collect. Leave it empty to use the built-in one.</p>
+            <textarea id="system-prompt" class="reflection-input prompt-editor" spellcheck="false" placeholder="Loading…"></textarea>
+            <div class="data-row" style="margin-top:10px">
+              <button type="button" class="btn btn-primary" id="system-prompt-save">Save</button>
+              <button type="button" class="btn btn-ghost" id="system-prompt-reset">Restore the default</button>
+              <span class="data-note" id="system-prompt-note"></span>
+            </div>
+            <p class="data-note" style="margin-top:14px">Each board also has its own enrichment prompt, in that board's ⚙ editor. This one is the global fallback for capture.</p>
+          </div>
+        </div><!-- /system panel -->
+
       </div>
     `);
+    wireWelcomeTabs();
+    wireDataPanel();
+    wireSystemPanel();
     document.getElementById('modal').classList.add('modal--welcome');
   }
 
@@ -3502,12 +4125,13 @@ LLM_API_KEY=sk-…</pre>
   // load() is called by the module script below after collectionHelpers are initialized
 </script>
 <script type="module">
-  import { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
-  window.collectionHelpers = { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
+  import { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
+  window.collectionHelpers = { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
   // Story 7.2: generic descriptor-driven field renderer (Epic 8 wires it into the
   // descriptor-driven card/modal when the UI consumes the SQLite item model).
   import { renderField, renderFields, renderAsset, isSafeUrl } from './descriptor/render-map.js';
   window.renderHelpers = { renderField, renderFields, renderAsset, isSafeUrl };
+  mountDataFab();
   load();
 </script>
 </body>

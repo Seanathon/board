@@ -166,3 +166,21 @@ describe('snapshotsDir (Story 16.1)', () => {
     }
   });
 });
+
+// The capture job covers headless capture AND the LLM read as one unit of work. At
+// the original fixed 60s an ordinary Claude-CLI enrichment could exhaust the budget
+// and land the item in `error: timed out` with a captured page already in hand.
+describe('capture timeout budget', () => {
+  it('defaults to a budget that fits capture plus an LLM read', () => {
+    assert.equal(loadConfig({}).captureTimeoutMs, 180_000);
+  });
+
+  it('is overridable for slow local models', () => {
+    assert.equal(loadConfig({ CAPTURE_TIMEOUT_MS: '600000' }).captureTimeoutMs, 600_000);
+  });
+
+  it('rejects a non-numeric or zero value', () => {
+    assert.throws(() => loadConfig({ CAPTURE_TIMEOUT_MS: 'soon' }), /CAPTURE_TIMEOUT_MS/);
+    assert.throws(() => loadConfig({ CAPTURE_TIMEOUT_MS: '0' }), /CAPTURE_TIMEOUT_MS/);
+  });
+});

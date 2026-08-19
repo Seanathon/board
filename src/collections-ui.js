@@ -128,6 +128,16 @@ const SAFE_ERROR_REASONS = new Set([
   "interrupted", // reconcileInterruptedItems (boot sweep of stuck `processing`)
 ]);
 
+/**
+ * The user-safe rendering of an item's failure. Anything outside the known set from
+ * `cleanErrorReason` is replaced wholesale: an unrecognised reason may be a raw stack
+ * or carry a secret, and a card is the last place that should surface one (UJ-2).
+ */
+export function safeErrorReason(item) {
+  const raw = item?.errorReason ?? item?.error_reason ?? "";
+  return SAFE_ERROR_REASONS.has(raw) ? raw : "Couldn't analyze this item";
+}
+
 export function renderEnrichmentState(item, descriptor, opts = {}) {
   if (!item) return "";
   const providerConfigured = !!opts.providerConfigured;
@@ -356,4 +366,48 @@ export function topicCounts(items) {
     }
   }
   return counts;
+}
+
+// --- Capture lifecycle ---
+
+/**
+ * Whether an item already carries its AI read. Covers both board shapes: Inspiration
+ * nests under `meta` and `design`, Library keeps summary/topics/key_points at the top
+ * level. Knowing only one shape would strand the other board's items in a skeleton.
+ */
+function hasAiRead(item) {
+  return !!(
+    item.meta?.tier ||
+    item.meta?.tags?.length ||
+    item.design?.steal_this ||
+    item.summary ||
+    item.topics?.length ||
+    item.key_points?.length
+  );
+}
+
+/**
+ * What a card should show for an item, given its lifecycle status.
+ *
+ * `ready` is the default for anything that isn't provably in flight: an unknown or
+ * missing status must never trap a card in a permanent skeleton. Items that already
+ * carry an AI read are ready whatever their status claims — legacy imports predate
+ * the status backfill and sit at 'pending' with complete data.
+ *
+ * @returns {'ready'|'capturing'|'reading'|'failed'}
+ */
+export function itemRenderState(item) {
+  if (!item) return "ready";
+  if (item.status === "error") return "failed";
+  if (item.status !== "pending" && item.status !== "processing") return "ready";
+  if (hasAiRead(item)) return "ready";
+  // Capture writes title + screenshot before enrichment runs, so either one means
+  // the page is in hand and only the AI read is outstanding.
+  return item.title || item.screenshot ? "reading" : "capturing";
+}
+
+/** True while an item is still being captured or read (skeleton showing). */
+export function isInFlight(item) {
+  const state = itemRenderState(item);
+  return state === "capturing" || state === "reading";
 }

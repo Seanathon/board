@@ -9,6 +9,7 @@ import { eq } from 'drizzle-orm';
 import { initDb } from '../db/index.js';
 import { boards, assets, items } from '../db/schema.js';
 import { runItemJob, type TimeoutFn } from '../db/queue.js';
+import { statusHub, type StatusEvent } from '../sse.js';
 import {
   createCaptureRegistry,
   dispatchCapture,
@@ -146,5 +147,50 @@ describe('dispatchCapture — SSRF guard at the URL seam', () => {
     registry.register({ ingestMode: 'manual-upload', fetch: async () => { fetched = true; return { fields: {}, assets: [] }; } });
     await dispatchCapture(registry, 'manual-upload', { buffer: Buffer.from('img') }, {} as never);
     assert.equal(fetched, true, 'buffer sources skip the URL guard');
+  });
+});
+
+// Story: progressive reveal. Capture writes title + screenshot BEFORE the LLM runs,
+// but that write published nothing, so the browser could not show the page until
+// enrichment finished (or failed). Capture now announces itself.
+describe('runCaptureForItem publishes a captured event (progressive reveal)', () => {
+  let dir: string;
+  let handle: ReturnType<typeof initDb>;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'board-oss-capture-evt-'));
+    handle = initDb(join(dir, 'c.db'));
+    handle.db.insert(boards).values({ id: 'tb', name: 'T', view: 'grid', descriptor: { fields: [], enrichment_prompt: '', view: 'grid', ingest_mode: 'test' } }).run();
+    handle.db.insert(items).values({ id: 'it', boardId: 'tb', source: 'https://x.example' }).run();
+  });
+  after(() => {
+    handle.sqlite.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('publishes `captured` with the title so the card fills before enrichment', async () => {
+    const seen: StatusEvent[] = [];
+    const unsubscribe = statusHub.subscribe({
+      write: (frame) => {
+        const line = frame.split('\n').find((l) => l.startsWith('data: '));
+        if (line) seen.push(JSON.parse(line.slice(6)) as StatusEvent);
+      },
+    });
+    try {
+      const reg = createCaptureRegistry();
+      reg.register({
+        ingestMode: 'test',
+        fetch: async () => ({ fields: { title: 'Captured Title' }, assets: [] }),
+      });
+      await runCaptureForItem(handle, reg, { itemId: 'it', boardId: 'tb', source: 'https://x.example' });
+    } finally {
+      unsubscribe();
+    }
+
+    const captured = seen.find((e) => e.status === 'captured');
+    assert.ok(captured, 'capture must publish a `captured` event');
+    assert.equal(captured.itemId, 'it');
+    assert.equal(captured.boardId, 'tb');
+    assert.equal(captured.title, 'Captured Title', 'the event carries the captured title');
   });
 });

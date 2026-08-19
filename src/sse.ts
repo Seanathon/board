@@ -12,6 +12,13 @@ export interface StatusEvent {
   error_reason?: string;
   /** Populated on `done` so Story 8.4 renders the filled card without a refetch. */
   fields?: Record<string, unknown>;
+  /**
+   * Progressive reveal: capture writes title + screenshot before the LLM runs, so a
+   * `captured` transition carries them and the card fills its image and heading while
+   * the AI read is still outstanding. Absent on every other transition.
+   */
+  title?: string;
+  screenshot?: string;
 }
 
 /** A minimal write sink (the SSE response stream). */

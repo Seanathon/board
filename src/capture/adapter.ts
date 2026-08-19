@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 
 import { boards, items, type NewAsset } from '../db/schema.js';
 import { writeItemDirect } from '../db/queue.js';
+import { statusHub } from '../sse.js';
 import { createUrlScreenshotAdapter } from './url-screenshot.js';
 import { createUrlReadableAdapter } from './url-readable.js';
 import { assertCapturableUrl } from './net-guard.js';
@@ -178,4 +179,17 @@ export async function runCaptureForItem(
     { ...item, ...systemUpdates, id: args.itemId, boardId: args.boardId, fields: mergedFields },
     assetRows,
   );
+
+  // Progressive reveal: the row now holds the page (title + image) but the AI read is
+  // still outstanding, and the item's DB status stays `processing` throughout. Announce
+  // the partial fill so the card shows the real page instead of a skeleton while the
+  // LLM runs. Distinct from a status transition — nothing in the DB changed state.
+  const shot = assetRows.find((a) => a.kind === 'screenshot') ?? assetRows.find((a) => a.kind === 'image');
+  statusHub.publish({
+    itemId: args.itemId,
+    boardId: args.boardId,
+    status: 'captured',
+    title: (systemUpdates as { title?: string }).title ?? item?.title ?? undefined,
+    screenshot: shot?.path || undefined,
+  });
 }
