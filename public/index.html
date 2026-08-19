@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Board</title>
   <link rel="icon" href="/favicon.png" type="image/png" />
   <!-- Story 13.3: PWA install + Web Share Target. Manifest declares the share_target;
@@ -109,7 +109,8 @@
     .logo span { color: var(--accent); }
 
     .search {
-      flex: 1;
+      flex: 1 1 0;
+      min-width: 110px;
       max-width: 340px;
       background: var(--surface);
       border: 1px solid var(--border);
@@ -224,6 +225,7 @@
       display: flex;
       gap: 6px;
       align-items: center;
+      flex-shrink: 0;
     }
 
     .add-input {
@@ -668,7 +670,25 @@
     .clear-filters-btn:hover { color: var(--text); border-color: var(--border-hover); }
 
     /* ── Collection switcher ── */
-    .collection-switcher { display: flex; gap: 4px; flex-shrink: 0; }
+    /* The board list is the ONLY part of the header that grows without bound (one more
+       button per board), so it is the part that has to give. It was flex-shrink:0 with
+       a fixed-width .add-input beside it, so past ~5 boards neither side could shrink,
+       the left group overflowed its own box and painted straight over the add bar.
+       Now it scrolls horizontally instead — no visual change while everything fits. */
+    .collection-switcher { display: flex; align-items: center; gap: 4px; min-width: 0; }
+    /* ONLY the board list scrolls. ⚙ and + sit outside it and are always reachable —
+       scrolling them off would mean a crowded header could hide the one affordance that
+       creates a board, which is exactly the state you would want it in. */
+    .coll-scroll {
+      display: flex;
+      gap: 4px;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .coll-scroll::-webkit-scrollbar { display: none; }
+    .coll-scroll > .coll-btn, .collection-switcher > .coll-btn { flex-shrink: 0; }
     .coll-btn {
       padding: 4px 12px;
       border-radius: 16px;
@@ -682,6 +702,7 @@
     }
     .coll-btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
     .coll-btn.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 500; }
+    .coll-btn-text { display: none; }
     /* Square icon buttons (edit ⚙ / new +) — equal padding, centered glyph, same height. */
     .coll-btn.coll-edit, .coll-btn.coll-new {
       display: inline-flex;
@@ -729,10 +750,18 @@
     .bf-ai[data-on="true"] { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
 
     /* ── Main Layout ── */
+    /* Grid view runs FULL WIDTH: the cards are a fixed ~300px track, so extra width
+       buys more columns rather than bigger cards, and a dense board is the point of
+       the grid. List view is prose and needs a measure, so it (and the tag strip above
+       it) keeps a centred column — `main[data-view]` is set by render(). */
     main {
       padding: 24px 20px;
-      max-width: 1600px;
-      margin: 0 auto;
+    }
+
+    main[data-view="list"] #list-view,
+    main[data-view="list"] .tag-cloud {
+      max-width: 1100px;
+      margin-inline: auto;
     }
 
     .tag-cloud {
@@ -1749,6 +1778,361 @@
       margin-top: 14px;
     }
 
+    /* ══ Phone / vertical-tablet layout ═══════════════════════════════════════════
+       Breakpoint 900px: catches every common vertical tablet (iPad Mini 744, iPad 810,
+       iPad Pro 11" 834) and leaves 1024px+ laptops on the desktop layout untouched.
+
+       Everything net-new is display:none HERE, at the top level, and is turned on only
+       inside the media query below. The desktop cascade therefore reaches none of it —
+       the desktop layout is byte-for-byte what it was. */
+    .board-pill, .hdr-actions, .scrim, .drawer, .add-dock { display: none; }
+
+    @media (max-width: 900px) {
+      /* ── Header: two rows collapse to one ── */
+      header { padding: 8px 12px; gap: 0; }
+      /* Row 2 (filters + count/sort/view/theme) empties into the drawer. */
+      header .header-row + .header-row { display: none; }
+      .header-row { gap: 8px; }
+      .header-row-left { gap: 8px; align-items: center; }
+      .logo { flex-shrink: 0; }
+      .hdr-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+
+      .hdr-icon {
+        position: relative;
+        width: 44px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        border-radius: var(--radius-sm);
+        color: var(--text-2);
+        cursor: pointer;
+      }
+      .hdr-icon:active { background: var(--surface-2); }
+      .hdr-icon svg { width: 18px; height: 18px; }
+      /* State is never color alone: the dot is a shape that appears, and the button's
+         aria-label gains a count in JS. */
+      .hdr-dot {
+        position: absolute;
+        top: 9px;
+        right: 9px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+        border: 2px solid var(--header-bg);
+      }
+
+      /* A chip, not a second wordmark: a surface, a hairline and a caret say "press
+         me". 44px tall so the tap target is real, with the fill inset to keep it
+         looking like a control rather than a bar. */
+      .board-pill {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
+        height: 44px;
+        padding: 0 9px 0 11px;
+        margin-left: 2px;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        color: var(--text);
+        font-size: 13.5px;
+        font-weight: 500;
+        line-height: 1;
+        font-family: inherit;
+        cursor: pointer;
+      }
+      .board-pill #board-pill-name { line-height: 1; }
+      .board-pill:active { border-color: var(--border-hover); }
+      .board-pill[aria-expanded="true"] { border-color: var(--border-hover); background: var(--surface); }
+      .board-pill #board-pill-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .board-pill svg { display: block; width: 12px; height: 12px; flex-shrink: 0; color: var(--text-3); }
+
+      /* Three header modes, one row. `title` rests; `search` and `add` each take the
+         whole row and leave a ✕. The add bar is the SAME node the desktop uses, so the
+         provider menu keeps its anchor. */
+      header[data-mode="title"] .search,
+      header[data-mode="title"] #hdr-back { display: none; }
+
+      header[data-mode="search"] .logo,
+      header[data-mode="search"] .board-pill,
+      header[data-mode="search"] .add-bar,
+      header[data-mode="search"] #search-btn,
+      header[data-mode="search"] #drawer-btn { display: none; }
+      header[data-mode="search"] .search { display: block; flex: 1; min-width: 0; }
+
+      /* ── Drawer ── */
+      .scrim {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 190;
+        background: rgba(0, 0, 0, 0.5);
+        opacity: 0;
+        transition: opacity 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .scrim[hidden] { display: none; }
+      .scrim.open { opacity: 1; }
+
+      .drawer {
+        display: flex;
+        flex-direction: column;
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        z-index: 200;
+        width: min(86vw, 340px);
+        background: var(--surface);
+        border-right: 1px solid var(--border);
+        transform: translateX(-100%);
+        transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+        padding-top: env(safe-area-inset-top);
+      }
+      .drawer[hidden] { display: none; }
+      .drawer.open { transform: translateX(0); }
+
+      .drawer-scroll {
+        flex: 1;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 14px 16px 20px;
+      }
+      .drawer-head {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-2);
+        margin: 20px 0 8px;
+      }
+      .drawer-scroll > .drawer-head:first-child { margin-top: 0; }
+      .drawer-slot:empty, .drawer-slot:empty + .drawer-head { display: none; }
+
+      /* Boards become full-width rows; the switcher's ⚙ and + ride along. */
+      #drawer-boards .collection-switcher { display: flex; flex-direction: column; gap: 2px; }
+      #drawer-boards .coll-btn {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 44px;
+        justify-content: flex-start;
+        text-align: left;
+        font-size: 14px;
+        padding: 0 12px;
+        border: 1px solid transparent;
+        border-radius: var(--radius-sm);
+      }
+      /* A full-width solid-accent bar for the current board shouts; the collection is
+         the hero, not the nav. Dim fill + accent text + a ✓ says the same thing
+         quietly, and the ✓ means state is not carried by color alone. */
+      #drawer-boards .coll-btn.active {
+        background: var(--accent-dim);
+        color: var(--accent);
+        border-color: transparent;
+        font-weight: 600;
+      }
+      #drawer-boards .coll-btn.active::after {
+        content: "✓";
+        margin-left: auto;
+        font-size: 13px;
+      }
+      #drawer-boards .coll-btn-text { display: inline; }
+
+      /* "Edit this board" hangs off the active row on an elbow, so "this" has a
+         referent. A 1px neutral connector, not an accent rule. */
+      #drawer-boards .coll-edit {
+        position: relative;
+        width: calc(100% - 20px);
+        margin-left: 20px;
+        color: var(--text-2);
+        font-size: 13px;
+        min-height: 40px;
+      }
+      #drawer-boards .coll-edit::before {
+        content: "";
+        position: absolute;
+        left: -11px;
+        top: -8px;
+        bottom: 50%;
+        width: 8px;
+        border-left: 1px solid var(--border-hover);
+        border-bottom: 1px solid var(--border-hover);
+        border-bottom-left-radius: 5px;
+        pointer-events: none;
+      }
+      /* Creating a board is an action, not another row in the list — a secondary
+         button says that on its own, so the list needs no divider above it. */
+      #drawer-boards .coll-new {
+        justify-content: center;
+        gap: 6px;
+        width: 100%;
+        margin-top: 14px;
+        border: 1px solid var(--border);
+        color: var(--text-2);
+        font-size: 13px;
+        font-weight: 500;
+      }
+      #drawer-boards .coll-new:active { background: var(--surface-2); }
+
+      /* Filters stack; every control clears 44px. */
+      #drawer-filters .filters {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        padding: 0;
+      }
+      #drawer-filters .filter-select,
+      #drawer-filters .fav-filter-btn,
+      #drawer-filters .clear-filters-btn { width: 100%; min-height: 44px; font-size: 14px; }
+      #drawer-filters .fav-filter-btn { justify-content: center; }
+      #drawer-filters .tier-filters { display: flex; gap: 8px; }
+      #drawer-filters .tier-btn { flex: 1; min-height: 44px; font-size: 12px; }
+      #drawer-filters #descriptor-facets { flex-direction: column; gap: 10px; }
+      /* The drawer footer owns Clear, so the inline one would be a second copy. */
+      #drawer-filters .clear-filters-btn { display: none; }
+
+      #drawer-view .header-right { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+      #drawer-view .count { display: none; } /* the footer's "Show N" is this number */
+      #drawer-view .filter-select { flex: 1; min-height: 44px; font-size: 14px; }
+      #drawer-view .view-btn { min-width: 52px; min-height: 44px; }
+      #drawer-view .theme-toggle { min-width: 44px; min-height: 44px; }
+
+      #drawer-tags .tag-cloud { margin: 0; max-height: none; }
+      #drawer-tags .tag-chip { min-height: 40px; font-size: 13px; padding: 0 14px; }
+
+      .drawer-foot {
+        flex-shrink: 0;
+        border-top: 1px solid var(--border);
+        padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        background: var(--surface);
+      }
+      .drawer-data {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 44px;
+        padding: 0 4px;
+        background: none;
+        border: none;
+        color: var(--text-2);
+        font-family: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .drawer-data svg { width: 15px; height: 15px; flex-shrink: 0; }
+      .drawer-actions { display: flex; gap: 10px; }
+      .drawer-actions .btn { flex: 1; min-height: 44px; }
+
+      /* ── Add dock ── */
+      .add-dock {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        position: fixed;
+        left: 12px;
+        right: 16px;
+        bottom: calc(16px + env(safe-area-inset-bottom));
+        z-index: 45;
+        pointer-events: none; /* the empty stretch left of the field stays tappable-through */
+      }
+      .add-dock > * { pointer-events: auto; }
+      body.drawer-open .add-dock, body.modal-open .add-dock { display: none; }
+
+      .add-fab {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        border: none;
+        background: var(--accent);
+        color: #000;
+        cursor: pointer;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+        transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .add-fab:active { transform: scale(0.94); }
+      /* + and ✓ are stacked and cross-rotate, so the button reads as ONE control
+         changing meaning rather than two buttons swapping places. */
+      .fab-plus, .fab-check {
+        position: absolute;
+        width: 22px;
+        height: 22px;
+        transition: opacity 0.16s ease, transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .fab-check { opacity: 0; transform: rotate(-90deg) scale(0.5); }
+      body.add-open .fab-plus { opacity: 0; transform: rotate(90deg) scale(0.5); }
+      body.add-open .fab-check { opacity: 1; transform: none; }
+
+      /* The field grows out of the button: it starts collapsed AT the button's edge and
+         slides left, so the eye never leaves the thing it just pressed. */
+      .add-dock .add-bar {
+        flex: 1;
+        min-width: 0;
+        opacity: 0;
+        transform: translateX(16px);
+        visibility: hidden;
+        transition: opacity 0.18s ease, transform 0.26s cubic-bezier(0.22, 1, 0.36, 1), visibility 0.26s;
+      }
+      body.add-open .add-dock .add-bar { opacity: 1; transform: none; visibility: visible; }
+      .add-dock .add-input {
+        flex: 1;
+        min-width: 0;
+        height: 48px;
+        border-radius: 24px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+      }
+      /* The ✓ IS the submit, so the inline Add button would be a second one. */
+      .add-dock .add-action { display: none; }
+      .add-dock .add-status {
+        position: absolute;
+        bottom: 60px;
+        right: 0;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 6px 10px;
+        font-size: 12px;
+      }
+      /* The corner belongs to the frequent action; import/export moves into the drawer. */
+      .data-fab { display: none; }
+
+      /* ── Content ── */
+      main { padding: 16px 12px calc(84px + env(safe-area-inset-bottom)); }
+      /* The tag cloud lives in the drawer now; its slot in <main> would be a blank gap. */
+      main > .tag-cloud { display: none; }
+      /* Card controls: 30px is not a touch target. */
+      .fav-btn, .more-btn { width: 44px; height: 44px; }
+      .more-btn-list { width: 44px; height: 44px; }
+      /* .modal is overflow:hidden and .modal-overlay is what scrolls, so capping the
+         modal's height would CLIP a long board editor with no way to reach the rest.
+         Trim the overlay's padding instead and let it scroll, exactly as desktop does. */
+      .modal-overlay { padding: 12px 10px calc(12px + env(safe-area-inset-bottom)); }
+      .modal-body { padding: 18px 16px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .drawer, .scrim, .add-fab { transition: none; }
+    }
+
     .save-status {
       font-size: 12px;
       color: var(--polish);
@@ -1766,6 +2150,12 @@
   <div class="header-row">
     <div class="header-row-left">
       <div class="logo">Board<span>.</span></div>
+      <!-- Phone only: the active board's name, standing in for the switcher that moves
+           into the drawer below 720px. Opens the same drawer as ☰. -->
+      <button class="board-pill" id="board-pill" type="button" aria-controls="drawer" aria-expanded="false">
+        <span id="board-pill-name">Board</span>
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 6h8l-4 5-4-5z"/></svg>
+      </button>
       <input class="search" type="search" placeholder="Search sites, tags, ideas..." id="search" />
     </div>
     <div class="add-bar">
@@ -1783,6 +2173,18 @@
           <button class="agent-option add-llm-option" type="button" role="menuitem">+ Add LLM</button>
         </div>
       </div>
+    </div>
+    <div class="hdr-actions">
+      <button class="hdr-icon" id="search-btn" type="button" aria-label="Search">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
+      </button>
+      <button class="hdr-icon" id="drawer-btn" type="button" aria-label="Boards and filters" aria-controls="drawer" aria-expanded="false">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+        <span class="hdr-dot" id="filter-dot" hidden></span>
+      </button>
+      <button class="hdr-icon" id="hdr-back" type="button" aria-label="Done">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg>
+      </button>
     </div>
   </div>
   <div class="header-row">
@@ -1859,6 +2261,45 @@
   </button>
 </div>
 
+<!-- ── Phone / vertical-tablet chrome (<=900px) ──────────────────────────────────
+     The drawer does NOT duplicate the desktop controls; syncChrome() MOVES the real
+     #collection-switcher, .filters, .header-right and tag-cloud nodes into these
+     slots at the breakpoint and moves them back above it. Duplicating them would mean
+     duplicate ids and two sets of listeners to keep in sync; moving preserves every
+     handler already bound (listeners survive appendChild). -->
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden>
+  <div class="drawer-scroll">
+    <h2 class="drawer-head" id="drawer-title">Boards</h2>
+    <div class="drawer-slot" id="drawer-boards"></div>
+    <h2 class="drawer-head" id="drawer-filters-head">Filters</h2>
+    <div class="drawer-slot" id="drawer-filters"></div>
+    <h2 class="drawer-head">View</h2>
+    <div class="drawer-slot" id="drawer-view"></div>
+    <h2 class="drawer-head" id="drawer-tags-head">Tags</h2>
+    <div class="drawer-slot" id="drawer-tags"></div>
+  </div>
+  <div class="drawer-foot">
+    <button class="drawer-data" id="drawer-data" type="button">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4"/><path d="M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/></svg>
+      Data &amp; settings
+    </button>
+    <div class="drawer-actions">
+      <button class="btn btn-ghost" id="drawer-clear" type="button">Clear</button>
+      <button class="btn btn-primary" id="drawer-apply" type="button">Show <span id="drawer-count">0</span></button>
+    </div>
+  </div>
+</aside>
+<!-- The add dock. On mobile syncChrome() moves the real .add-bar in here, so the URL
+     field arrives NEXT TO the button you just pressed instead of at the far end of the
+     page. The + morphs to a ✓ and becomes the submit. -->
+<div class="add-dock" id="add-dock">
+  <button class="add-fab" id="add-fab" type="button" aria-label="Add a URL" aria-expanded="false">
+    <svg class="fab-plus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+    <svg class="fab-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>
+  </button>
+</div>
+
 <input type="file" id="screenshot-file-input" accept="image/png,image/jpeg,image/webp" style="display:none" />
 
 <div class="refetch-popover" id="refetch-popover">
@@ -1915,7 +2356,7 @@
   // null = unknown until /api/meta resolves; then boolean. Drives the add button label
   // ("Add" vs "Add with <provider>") and the caret menu ("+ Add LLM").
   let providerConfigured = null;
-  // The configured provider's human label from /api/meta (e.g. "Claude Code"), or null.
+  // The configured provider's human label from /api/meta (e.g. "Claude"), or null.
   let providerLabel = null;
   let collections = [];
   let activeCollection = 'inspiration';
@@ -1924,7 +2365,7 @@
   let currentLibraryItem = null;
 
   const TIER_LABELS = { structural: 'Structural', polish: 'Polish', reference: 'Reference' };
-  const ANALYSIS_AGENT_LABELS = { claude: 'Claude Code', codex: 'Codex' };
+  const ANALYSIS_AGENT_LABELS = { claude: 'Claude', codex: 'Codex' };
   const DESIGN_FIELDS = [
     ['above_fold', 'Above the Fold'],
     ['nav_pattern', 'Navigation'],
@@ -2186,6 +2627,243 @@ LLM_API_KEY=sk-…</pre>
     } catch { /* SSE unavailable — poll fallback (manual load) remains */ }
   }
 
+  // ══ Phone / vertical-tablet chrome (<=900px) ═══════════════════════════════════
+  // The drawer HOSTS the desktop's own control nodes rather than copying them: at the
+  // breakpoint the real #collection-switcher, .filters, .header-right and tag clouds
+  // are appended into drawer slots, and appended back to their original parents above
+  // it. Every listener bound in this file keeps working, because listeners survive
+  // appendChild. Copying instead would mean duplicate ids and two sets of state.
+
+  const MOBILE_MQ = window.matchMedia('(max-width: 900px)');
+  const relocations = [];
+  let chromeIsMobile = null;
+
+  function rememberHome(node) {
+    if (!node || relocations.some(r => r.node === node)) return;
+    relocations.push({ node, parent: node.parentNode, next: node.nextSibling });
+  }
+
+  /** Move the chrome into the drawer (mobile) or back where it came from (desktop). */
+  function syncChrome() {
+    const mobile = MOBILE_MQ.matches;
+    if (mobile === chromeIsMobile) return;
+    chromeIsMobile = mobile;
+
+    const moves = [
+      ['collection-switcher', 'drawer-boards'],
+      ['tag-cloud', 'drawer-tags'],
+      ['library-topic-cloud', 'drawer-tags'],
+    ];
+    const filtersEl = document.querySelector('.filters');
+    const headerRight = document.querySelector('.header-right');
+    const addBar = document.querySelector('.add-bar');
+
+    if (mobile) {
+      for (const [id, slot] of moves) {
+        const node = document.getElementById(id);
+        if (node) { rememberHome(node); document.getElementById(slot).appendChild(node); }
+      }
+      if (filtersEl) { rememberHome(filtersEl); document.getElementById('drawer-filters').appendChild(filtersEl); }
+      if (headerRight) { rememberHome(headerRight); document.getElementById('drawer-view').appendChild(headerRight); }
+      // The add bar docks beside the FAB rather than staying in the header.
+      if (addBar) { rememberHome(addBar); document.getElementById('add-dock').prepend(addBar); }
+    } else {
+      closeDrawer(true);
+      closeAddDock();
+      setHeaderMode('title');
+      for (const r of relocations) {
+        if (r.next && r.next.parentNode === r.parent) r.parent.insertBefore(r.node, r.next);
+        else r.parent.appendChild(r.node);
+      }
+      relocations.length = 0;
+    }
+    // The two modes order the switcher differently (see renderSwitcher), so rebuild it.
+    if (collections.length) renderSwitcher();
+    updateDrawerChrome();
+  }
+
+  /** Keep the drawer's labels, counts and the filters-active dot honest. */
+  function updateDrawerChrome() {
+    const col = collections.find(c => c.id === activeCollection);
+    const pill = document.getElementById('board-pill-name');
+    if (pill) pill.textContent = col ? col.name : 'Board';
+    const fh = document.getElementById('drawer-filters-head');
+    if (fh) fh.textContent = col ? `Filter ${col.name}` : 'Filters';
+    const count = document.getElementById('drawer-count');
+    if (count) count.textContent = String(filtered.length);
+
+    // A drawer can hide active filters, so the ☰ carries a mark when any are on — and
+    // the accessible name says so too, because a dot is not available to a screen reader.
+    const active = activeFilterCount();
+    const dot = document.getElementById('filter-dot');
+    const btn = document.getElementById('drawer-btn');
+    if (dot) dot.hidden = active === 0;
+    if (btn) btn.setAttribute('aria-label', active ? `Boards and filters, ${active} active` : 'Boards and filters');
+  }
+
+  function activeFilterCount() {
+    let n = 0;
+    ['audience-filter', 'form-filter', 'domain-filter', 'library-type-filter'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && el.value) n++;
+    });
+    n += activeTiers.size;
+    if (showFavoritesOnly) n++;
+    if (activeTag) n++;
+    if (libraryTopicFilter) n++;
+    n += Object.values(descriptorFacetState).filter(Boolean).length;
+    return n;
+  }
+
+  // --- Header modes: title (rest) / search / add. One row, three jobs. ---
+  function setHeaderMode(mode) {
+    const header = document.querySelector('header');
+    header.dataset.mode = mode;
+    if (mode === 'search') document.getElementById('search').focus();
+  }
+
+  // --- The add dock: + morphs to ✓ and the URL field slides out beside it. ---
+  function addDockIsOpen() { return document.body.classList.contains('add-open'); }
+
+  function openAddDock() {
+    document.body.classList.add('add-open');
+    const fab = document.getElementById('add-fab');
+    fab.setAttribute('aria-expanded', 'true');
+    fab.setAttribute('aria-label', 'Add this URL');
+    // Focus SYNCHRONOUSLY, inside the same task as the tap. iOS Safari only opens the
+    // keyboard for a focus() that happens within the user gesture, so deferring this to
+    // rAF or a timeout would slide the field out and leave no keyboard. Reading
+    // offsetWidth first forces the style flush, so the field is already visible (and
+    // therefore focusable) by the time focus() runs.
+    const input = document.getElementById('add-input');
+    void input.offsetWidth;
+    input.focus();
+  }
+
+  function closeAddDock() {
+    if (!addDockIsOpen()) return;
+    document.body.classList.remove('add-open');
+    const fab = document.getElementById('add-fab');
+    fab.setAttribute('aria-expanded', 'false');
+    fab.setAttribute('aria-label', 'Add a URL');
+    document.getElementById('add-input').blur();
+  }
+
+  /**
+   * Closed → open the field. Open → submit, by clicking the SAME #add-btn the desktop
+   * uses, so there is one add path and no second copy of the submit logic. An empty
+   * field just closes: the ✓ should never look like it failed.
+   */
+  function toggleAddDock() {
+    if (!addDockIsOpen()) { openAddDock(); return; }
+    const input = document.getElementById('add-input');
+    if (!input.value.trim()) { closeAddDock(); return; }
+    document.getElementById('add-btn').click();
+    closeAddDock();
+  }
+
+  // --- Drawer open/close, with a focus trap and the background scroll locked. ---
+  let drawerLastFocused = null;
+  let drawerHideTimer = null;
+  const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
+  function drawerIsOpen() {
+    const d = document.getElementById('drawer');
+    return d && !d.hidden;
+  }
+
+  function openDrawer() {
+    const drawer = document.getElementById('drawer');
+    const scrim = document.getElementById('scrim');
+    if (!drawer || drawerIsOpen()) return;
+    drawerLastFocused = document.activeElement;
+    // A close scheduled moments ago would otherwise fire mid-open and hide the drawer
+    // we are opening right now (rapid switch → reopen).
+    if (drawerHideTimer) { clearTimeout(drawerHideTimer); drawerHideTimer = null; }
+    drawer.hidden = false;
+    scrim.hidden = false;
+    updateDrawerChrome();
+    // Next frame, so the transform transition has a start value to animate FROM.
+    requestAnimationFrame(() => { drawer.classList.add('open'); scrim.classList.add('open'); });
+    document.body.style.overflow = 'hidden';
+    document.body.classList.add('drawer-open');
+    document.getElementById('drawer-btn')?.setAttribute('aria-expanded', 'true');
+    document.getElementById('board-pill')?.setAttribute('aria-expanded', 'true');
+    (drawer.querySelector(FOCUSABLE) || drawer).focus();
+  }
+
+  function closeDrawer(immediate = false) {
+    const drawer = document.getElementById('drawer');
+    const scrim = document.getElementById('scrim');
+    if (!drawer || !drawerIsOpen()) return;
+    drawer.classList.remove('open');
+    scrim.classList.remove('open');
+    document.body.style.overflow = '';
+    document.body.classList.remove('drawer-open');
+    document.getElementById('drawer-btn')?.setAttribute('aria-expanded', 'false');
+    document.getElementById('board-pill')?.setAttribute('aria-expanded', 'false');
+    const finish = () => { drawer.hidden = true; scrim.hidden = true; drawerHideTimer = null; };
+    if (drawerHideTimer) clearTimeout(drawerHideTimer);
+    if (immediate) { drawerHideTimer = null; finish(); }
+    else drawerHideTimer = setTimeout(finish, 220);
+    if (drawerLastFocused && typeof drawerLastFocused.focus === 'function') drawerLastFocused.focus();
+    drawerLastFocused = null;
+  }
+
+  function wireMobileChrome() {
+    document.getElementById('drawer-btn').addEventListener('click', () => drawerIsOpen() ? closeDrawer() : openDrawer());
+    document.getElementById('board-pill').addEventListener('click', () => drawerIsOpen() ? closeDrawer() : openDrawer());
+    document.getElementById('scrim').addEventListener('click', () => closeDrawer());
+    document.getElementById('drawer-apply').addEventListener('click', () => closeDrawer());
+    document.getElementById('drawer-clear').addEventListener('click', () => {
+      document.getElementById('clear-filters-btn')?.click();
+      updateDrawerChrome();
+    });
+    document.getElementById('drawer-data').addEventListener('click', () => {
+      closeDrawer();
+      document.querySelector('.data-fab')?.click();
+    });
+    document.getElementById('search-btn').addEventListener('click', () => setHeaderMode('search'));
+    document.getElementById('add-fab').addEventListener('click', toggleAddDock);
+    document.getElementById('hdr-back').addEventListener('click', () => setHeaderMode('title'));
+    // Enter in the docked field submits, same as the desktop add bar.
+    document.getElementById('add-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && addDockIsOpen()) { e.preventDefault(); toggleAddDock(); }
+    });
+    // A tap on the board dismisses the dock — but never a tap inside it.
+    document.addEventListener('pointerdown', (e) => {
+      if (addDockIsOpen() && !e.target.closest('#add-dock')) closeAddDock();
+    });
+
+    // Esc closes the drawer first, then leaves search/add mode. The modal's own Esc
+    // handler stays untouched — a drawer is never open behind a modal.
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        if (drawerIsOpen()) { closeDrawer(); return; }
+        if (addDockIsOpen()) { closeAddDock(); return; }
+        const header = document.querySelector('header');
+        if (header.dataset.mode && header.dataset.mode !== 'title') setHeaderMode('title');
+        return;
+      }
+      if (e.key !== 'Tab' || !drawerIsOpen()) return;
+      const drawer = document.getElementById('drawer');
+      const items = [...drawer.querySelectorAll(FOCUSABLE)].filter(el => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+
+    // A board switch is navigation: it answers what the drawer was opened for.
+    document.getElementById('drawer-boards').addEventListener('click', (e) => {
+      if (e.target.closest('.coll-btn[data-cid]')) closeDrawer();
+    });
+
+    setHeaderMode('title');
+    MOBILE_MQ.addEventListener('change', syncChrome);
+    syncChrome();
+  }
+
   function renderSwitcher() {
     let sw = document.getElementById('collection-switcher');
     if (!sw) {
@@ -2197,18 +2875,42 @@ LLM_API_KEY=sk-…</pre>
     }
     // Edit (⚙) only makes sense with an active board; the New-board (+) affordance is
     // ALWAYS present so a board can be created even from the empty/degraded states.
-    const hasActive = !!collections.find(c => c.id === activeCollection);
-    sw.innerHTML = collections.map(c =>
+    const activeIndex = collections.findIndex(c => c.id === activeCollection);
+    const boardBtns = collections.map(c =>
       `<button class="coll-btn${activeCollection === c.id ? ' active' : ''}" data-cid="${esc(c.id)}">${esc(c.name)}</button>`
-    ).join('')
-      + (hasActive ? `<button class="coll-btn coll-edit" id="edit-board-btn" title="Edit this board">⚙</button>` : '')
-      + `<button class="coll-btn coll-new" id="new-board-btn" title="New board">+</button>`;
+    );
+    const editBtnHtml = activeIndex >= 0
+      ? `<button class="coll-btn coll-edit" id="edit-board-btn" title="Edit this board">⚙<span class="coll-btn-text">Edit this board</span></button>`
+      : '';
+    const newBtnHtml = `<button class="coll-btn coll-new" id="new-board-btn" title="New board">+<span class="coll-btn-text">New board</span></button>`;
+    if (chromeIsMobile) {
+      // In the drawer the boards are a vertical list, so "Edit THIS board" needs a
+      // referent: it sits directly under the active row, indented off an elbow, and
+      // reads as a child of the board it edits. Desktop keeps the flat trailing order.
+      const parts = [...boardBtns];
+      if (editBtnHtml) parts.splice(activeIndex + 1, 0, editBtnHtml);
+      sw.innerHTML = parts.join('') + newBtnHtml;
+    } else {
+      sw.innerHTML = `<div class="coll-scroll">${boardBtns.join('')}</div>` + editBtnHtml + newBtnHtml;
+    }
     sw.querySelectorAll('.coll-btn[data-cid]').forEach(b =>
       b.addEventListener('click', () => setActiveCollection(b.dataset.cid))
     );
     document.getElementById('new-board-btn').addEventListener('click', openComposeModal);
     const editBtn = document.getElementById('edit-board-btn');
     if (editBtn) editBtn.addEventListener('click', () => openEditBoardModal(activeCollection));
+    if (!chromeIsMobile) {
+      // A crowded header can leave the active board scrolled out of sight; bring it back.
+      sw.querySelector('.coll-scroll .coll-btn.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    // If the switcher was created after syncChrome ran, it lands in the header. Re-home
+    // it so a first paint on a phone doesn't leave the board list stranded up there.
+    const boardsSlot = document.getElementById('drawer-boards');
+    if (chromeIsMobile && boardsSlot && sw.parentNode !== boardsSlot) {
+      rememberHome(sw);
+      boardsSlot.appendChild(sw);
+    }
+    updateDrawerChrome();
   }
 
   // --- Story 10.1/10.3 + Edit: New board (compose→preview→create) & Edit board (rename/delete) ---
@@ -2221,7 +2923,7 @@ LLM_API_KEY=sk-…</pre>
   function showModalContent(html) {
     modalLastFocused = document.activeElement;
     document.getElementById('modal-content').innerHTML = html;
-    document.getElementById('modal-overlay').classList.add('open');
+    openModalOverlay();
   }
 
   const FIELD_TYPE_ORDER = ['url', 'image', 'text', 'tags', 'enum', 'number', 'date'];
@@ -2873,20 +3575,19 @@ LLM_API_KEY=sk-…</pre>
     }
 
     const sort = document.getElementById('sort-select').value;
-    const order = new Map(bookmarks.map((b, i) => [b.id, i]));
-    filtered.sort((a, b) => {
-      const cmp = String(a.added).localeCompare(String(b.added));
-      if (cmp !== 0) return sort === 'oldest' ? cmp : -cmp;
-      const ai = order.get(a.id), bi = order.get(b.id);
-      return sort === 'oldest' ? ai - bi : bi - ai;
-    });
+    // `filtered` preserves `bookmarks` order (created_at DESC), which is what the
+    // same-day tie-break reads as recency. See collections-ui.sortItems.
+    filtered = window.collectionHelpers.sortItems(filtered, sort);
 
     const noun = activeCollection === 'inspiration' ? 'site' : 'item';
     document.getElementById('count').textContent = `${filtered.length} ${noun}${filtered.length !== 1 ? 's' : ''}`;
+    updateDrawerChrome();
     render();
   }
 
   function render() {
+    // Drives the full-width-grid vs centred-list rule above.
+    document.querySelector('main').dataset.view = activeView;
     const activeCol = collections.find(c => c.id === activeCollection);
     // A COMPOSED board renders from its own descriptor. It can't use either seeded
     // renderer: /api/collections derives type "inspiration" for any grid board, which
@@ -3431,7 +4132,7 @@ LLM_API_KEY=sk-…</pre>
         content.querySelectorAll('.modal-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === target));
       });
     });
-    document.getElementById('modal-overlay').classList.add('open');
+    openModalOverlay();
   }
 
   function collectItemPatch() {
@@ -3534,7 +4235,7 @@ LLM_API_KEY=sk-…</pre>
     `;
     document.getElementById('modal-cancel').onclick = closeModal;
     document.getElementById('lib-notes-save').onclick = saveLibraryNotes;
-    document.getElementById('modal-overlay').classList.add('open');
+    openModalOverlay();
   }
 
   async function saveLibraryNotes() {
@@ -3752,7 +4453,7 @@ LLM_API_KEY=sk-…</pre>
       });
     });
 
-    document.getElementById('modal-overlay').classList.add('open');
+    openModalOverlay();
   }
 
   async function saveReflection() {
@@ -3786,9 +4487,28 @@ LLM_API_KEY=sk-…</pre>
     }
   }
 
+  /**
+   * Open the shared modal overlay and LOCK the page behind it. Without the lock, a
+   * touch drag over a modal scrolls the board underneath and the modal drifts out of
+   * reach. The overlay itself keeps `overflow-y: auto`, so a modal taller than the
+   * viewport still scrolls — that is the one scroll that stays live.
+   */
+  function openModalOverlay() {
+    // A modal supersedes both transient surfaces. "New board" and "Edit this board"
+    // are reached FROM the drawer, so without this the modal stacks on top of an open
+    // drawer and closing it drops you back into a menu you are done with.
+    closeAddDock();
+    closeDrawer(true);
+    document.getElementById('modal-overlay').classList.add('open');
+    document.body.classList.add('modal-open');
+    document.body.style.overflow = 'hidden';
+  }
+
   function closeModal() {
     stopComposeWorking(false); // the composer's elapsed clock must not tick on forever
     document.getElementById('modal-overlay').classList.remove('open');
+    document.body.classList.remove('modal-open');
+    if (!drawerIsOpen()) document.body.style.overflow = '';
     document.getElementById('modal').classList.remove('modal--welcome');
     currentBookmark = null;
     currentLibraryItem = null;
@@ -4545,13 +5265,14 @@ LLM_API_KEY=sk-…</pre>
   // load() is called by the module script below after collectionHelpers are initialized
 </script>
 <script type="module">
-  import { cardSummary, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
-  window.collectionHelpers = { cardSummary, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
+  import { cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
+  window.collectionHelpers = { cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
   // Story 7.2: generic descriptor-driven field renderer (Epic 8 wires it into the
   // descriptor-driven card/modal when the UI consumes the SQLite item model).
   import { renderField, renderFields, renderAsset, isSafeUrl } from './descriptor/render-map.js';
   window.renderHelpers = { renderField, renderFields, renderAsset, isSafeUrl };
   mountDataFab();
+  wireMobileChrome();
   load();
 </script>
 </body>

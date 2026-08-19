@@ -58,8 +58,11 @@ export interface ProviderInfo {
   label: string;
 }
 
+// The user-facing provider name, interpolated into "Add with {label}" and
+// "Using {label}". Kept to the product name alone — the extra "Code" bought nothing
+// in either sentence and cost header width the board switcher needs.
 const CLI_AGENT_LABELS: Record<'claude' | 'codex', string> = {
-  claude: 'Claude Code',
+  claude: 'Claude',
   codex: 'Codex',
 };
 

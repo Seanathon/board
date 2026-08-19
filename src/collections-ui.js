@@ -480,3 +480,27 @@ export function cardSummary(item, descriptor, opts = {}) {
   const maxTags = Number.isFinite(opts.maxTags) ? opts.maxTags : DEFAULT_MAX_TAGS;
   return { badge: slots.badge, lead: slots.lead, tags: slots.tags.slice(0, maxTags) };
 }
+
+// --- Sort ---------------------------------------------------------------------------
+/**
+ * Order a board's items by recency. `added` carries only a DATE, so everything captured
+ * on the same day compares equal and the TIE-BREAK decides the order of most of a
+ * board. Incoming order is authoritative for that tie-break: the items API returns
+ * `created_at DESC`, so index 0 is the newest item.
+ *
+ * The previous inline comparator broke the tie the wrong way round (it returned
+ * `bi - ai` for "newest"), which put the oldest same-day item first — so on a board
+ * where everything was added today, "Recently added" listed it backwards.
+ *
+ * Returns a NEW array; the caller's list order is the recency reference and must survive.
+ */
+export function sortItems(items, sort) {
+  const oldestFirst = sort === "oldest";
+  const index = new Map(items.map((item, i) => [item, i]));
+  return [...items].sort((a, b) => {
+    const byDate = String(a.added ?? "").localeCompare(String(b.added ?? ""));
+    if (byDate !== 0) return oldestFirst ? byDate : -byDate;
+    const ai = index.get(a), bi = index.get(b);
+    return oldestFirst ? bi - ai : ai - bi;
+  });
+}

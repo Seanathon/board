@@ -59,7 +59,10 @@ describe('describeProvider', () => {
     assert.equal(describeProvider(loadConfig({})), null);
   });
   it('labels a claude CLI agent', () => {
-    assert.deepEqual(describeProvider(loadConfig({ LLM_AGENT: 'claude' })), { kind: 'cli', agent: 'claude', label: 'Claude Code' });
+    // "Claude", not "Claude Code": this label is interpolated into the add button
+    // ("Add with Claude") and the provider menu ("Using Claude"), where the extra word
+    // buys nothing and costs header width the board switcher needs.
+    assert.deepEqual(describeProvider(loadConfig({ LLM_AGENT: 'claude' })), { kind: 'cli', agent: 'claude', label: 'Claude' });
   });
   it('labels a codex CLI agent', () => {
     assert.deepEqual(describeProvider(loadConfig({ LLM_AGENT: 'codex' })), { kind: 'cli', agent: 'codex', label: 'Codex' });

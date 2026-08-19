@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   resolveActiveCollection,
   cardSummary,
+  sortItems,
   itemsUrl,
   itemUrl,
   addUrl,
@@ -642,4 +643,41 @@ test("cardSummary reads the nested prototype shape too (meta.tags / design.steal
   assert.equal(s.badge?.value, "reference");
   assert.equal(s.lead?.value, "Lead with proof.");
   assert.deepEqual(s.tags, ["editorial"]);
+});
+
+// --- Sort order ---------------------------------------------------------------------
+// `added` is a DATE ("2026-08-19"), so every item captured on the same day ties. The
+// tie-break therefore decides the order of most of a board, not some rare edge.
+
+test("sortItems puts the newest first for 'newest', including same-day ties", () => {
+  // The API returns newest-first (created_at DESC), so index order IS recency.
+  const items = [
+    { id: "c", added: "2026-08-19" },
+    { id: "b", added: "2026-08-19" },
+    { id: "a", added: "2026-08-18" },
+  ];
+  assert.deepEqual(sortItems(items, "newest").map(i => i.id), ["c", "b", "a"]);
+});
+
+test("sortItems reverses to oldest-first for 'oldest', ties included", () => {
+  const items = [
+    { id: "c", added: "2026-08-19" },
+    { id: "b", added: "2026-08-19" },
+    { id: "a", added: "2026-08-18" },
+  ];
+  assert.deepEqual(sortItems(items, "oldest").map(i => i.id), ["a", "b", "c"]);
+});
+
+test("sortItems is exactly reversible when every item shares a date", () => {
+  const items = [{ id: "c" }, { id: "b" }, { id: "a" }].map(i => ({ ...i, added: "2026-08-19" }));
+  assert.deepEqual(sortItems(items, "newest").map(i => i.id), ["c", "b", "a"]);
+  assert.deepEqual(sortItems(items, "oldest").map(i => i.id), ["a", "b", "c"]);
+});
+
+test("sortItems does not mutate its input and tolerates a missing date", () => {
+  const items = [{ id: "b", added: "2026-08-19" }, { id: "a" }];
+  const before = items.map(i => i.id);
+  sortItems(items, "newest");
+  assert.deepEqual(items.map(i => i.id), before, "sorts a copy");
+  assert.equal(sortItems(items, "newest").length, 2);
 });
