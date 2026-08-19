@@ -134,3 +134,61 @@ describe('importer graceful absence (Story 1.5)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// An imported record arrives with its enrichment already done (it was enriched in the
+// JSON era), but `status` was never set, so it defaulted to 'pending' and stayed
+// there forever. That left 150 fully-populated items indistinguishable from items
+// still being captured, which is the signal the loading UI keys off.
+describe('imported item status', () => {
+  it('stores an already-enriched record as done, not pending', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-oss-import-status-'));
+    const handle = initDb(join(dir, 'c.db'));
+    try {
+      seed(handle.db);
+      await importRecords({
+        handle,
+        boardId: INSPIRATION_BOARD_ID,
+        records: [{
+          id: 'imported-1',
+          url: 'https://example.com',
+          title: 'Enriched Already',
+          meta: { tier: 'reference', tags: ['dark-theme'], audience: 'developer' },
+          design: { steal_this: 'Do the thing' },
+        }],
+      });
+      const row = handle.db.select().from(items).where(eq(items.id, 'imported-1')).get();
+      assert.equal(row?.status, 'done', 'an already-enriched import must not sit at pending');
+    } finally {
+      handle.sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Library enrichment lives under a different set of keys than Inspiration's
+  // meta.*/design.* — a predicate that only knows one board's shape leaves the other
+  // board's items stranded at 'pending'.
+  it('recognises library-shaped enrichment too, not just the inspiration shape', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-oss-import-lib-status-'));
+    const handle = initDb(join(dir, 'c.db'));
+    try {
+      seed(handle.db);
+      await importRecords({
+        handle,
+        boardId: LIBRARY_BOARD_ID,
+        records: [{
+          id: 'lib-1',
+          url: 'https://arxiv.org/abs/1',
+          title: 'A Paper',
+          summary: 'It compresses reasoning traces.',
+          topics: ['llm', 'compression'],
+          type: 'paper',
+        }],
+      });
+      const row = handle.db.select().from(items).where(eq(items.id, 'lib-1')).get();
+      assert.equal(row?.status, 'done', 'an enriched library import must not sit at pending');
+    } finally {
+      handle.sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

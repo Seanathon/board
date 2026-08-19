@@ -942,6 +942,80 @@
       font-size: 12px;
     }
 
+    /* --- Capture lifecycle: in-flight and failed cards ---
+       The skeleton ghosts THIS card's real geometry (image box, title line, badge,
+       steal line, tag row) at true size, so nothing shifts when real content lands and
+       the card visibly assembles in the order data arrives. A generic shimmer
+       rectangle would say only "something is loading"; this says what is still
+       missing. Motion is a slow staggered breathe, not a sweep. */
+    .ghost-bar {
+      background: var(--surface-2);
+      border-radius: 3px;
+      height: 9px;
+      animation: ghost-breathe 1.9s ease-in-out infinite;
+    }
+    .ghost-image {
+      width: 100%;
+      height: 200px;
+      background: var(--surface-2);
+      display: flex;
+      align-items: flex-end;
+      padding: 12px 14px;
+      box-sizing: border-box;
+      animation: ghost-breathe 1.9s ease-in-out infinite;
+    }
+    .ghost-tags { display: flex; gap: 6px; }
+    .ghost-tags .ghost-bar { height: 16px; border-radius: 999px; }
+    @keyframes ghost-breathe {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.42; }
+    }
+
+    /* The state word. Never color alone: the dot is an accompaniment to the label,
+       never the signal itself. */
+    .card-state {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      color: var(--text-2);
+    }
+    .card-state-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex: none;
+      animation: ghost-breathe 1.9s ease-in-out infinite;
+    }
+    .card-state.is-failed { color: var(--text-2); }
+    .card-state.is-failed .card-state-dot { background: #f87171; animation: none; }
+
+    .card-retry {
+      font-size: 11px;
+      color: var(--accent);
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .card-retry:disabled { color: var(--text-3); cursor: default; text-decoration: none; }
+
+    /* An in-flight card is not yet judgeable, so it stays quiet: no hover lift, no
+       cursor glow competing with the fill. */
+    .grid-card.is-inflight, .list-card.is-inflight, .lib-card.is-inflight { cursor: default; }
+    .grid-card.is-inflight:hover { transform: none; box-shadow: none; }
+    .grid-card.is-inflight::after, .list-card.is-inflight::after, .lib-card.is-inflight::after { display: none; }
+
+    /* Reduced motion: a real static path, not a disabled animation. The ghosts hold a
+       fixed dimmed opacity and content swaps in without transition. */
+    @media (prefers-reduced-motion: reduce) {
+      .ghost-bar, .ghost-image, .card-state-dot { animation: none; opacity: 0.6; }
+    }
+
     /* Library/text-board grid tile: no screenshot, scales to text fields. */
     .lib-grid-card { position: relative; }
     .lib-grid-card .more-btn-list { position: absolute; top: 10px; right: 10px; }
@@ -1785,6 +1859,45 @@ LLM_API_KEY=sk-…</pre>
   let statusSource = null;
   let subscribedCid = null;
   let statusReloadPending = false;
+
+  /**
+   * Fold one SSE transition into the in-memory item and re-render.
+   * @returns {boolean} true when the item was known and handled locally.
+   */
+  function applyStatusEvent(event) {
+    if (!event || !event.itemId) return false;
+    const item = bookmarks.find(b => b.id === event.itemId);
+    if (!item) return false;
+
+    if (event.status === 'captured') {
+      // Not a lifecycle transition: the row still reads `processing`. Only the newly
+      // captured page is applied, so the card keeps its skeleton for the AI fields.
+      if (event.title) item.title = event.title;
+      if (event.screenshot) { item.screenshot = event.screenshot; item._cacheBust = Date.now(); }
+    } else {
+      item.status = event.status;
+      if (event.error_reason !== undefined) item.error_reason = event.error_reason;
+      else delete item.error_reason;
+      if (event.fields && typeof event.fields === 'object') {
+        // `fields` arrives flat and dotted ("meta.tier"); the renderers read it nested.
+        for (const [key, value] of Object.entries(event.fields)) {
+          const dot = key.indexOf('.');
+          if (dot > 0) {
+            const group = key.slice(0, dot);
+            item[group] = { ...(item[group] || {}), [key.slice(dot + 1)]: value };
+          } else {
+            item[key] = value;
+          }
+        }
+      }
+    }
+    // A finished item can change the facet vocabulary, so refresh the clouds too.
+    if (event.status === 'done') {
+      if (activeCollection === 'inspiration') buildTagCloud(); else renderLibraryTopicCloud();
+    }
+    applyFilters();
+    return true;
+  }
   function subscribeToStatus() {
     if (typeof EventSource === 'undefined') return;
     if (statusSource && subscribedCid === activeCollection) return;
@@ -1792,7 +1905,16 @@ LLM_API_KEY=sk-…</pre>
       if (statusSource) statusSource.close();
       subscribedCid = activeCollection;
       statusSource = new EventSource(window.collectionHelpers.eventsUrl(activeCollection));
-      statusSource.addEventListener('status', () => {
+      statusSource.addEventListener('status', (e) => {
+        // Merge the transition into the card in place. A full load() would discard
+        // scroll position and any open popover on every hop of a capture, and the
+        // `captured` event carries exactly what the card needs to fill its image and
+        // title while the AI read is still running.
+        let event;
+        try { event = JSON.parse(e.data); } catch { return; }
+        if (applyStatusEvent(event)) return;
+        // An event for an item this client has never seen (added from the extension,
+        // the share target, or another tab) — fall back to a debounced board refetch.
         if (statusReloadPending) return;
         statusReloadPending = true;
         setTimeout(() => { statusReloadPending = false; load(); }, 200);
@@ -2229,12 +2351,18 @@ LLM_API_KEY=sk-…</pre>
     const anyActive = !!(q || audience || form || domain || activeTiers.size || showFavoritesOnly || activeTag || libraryTopicFilter || libraryTypeFilter);
     document.getElementById('clear-filters-btn').classList.toggle('visible', anyActive);
 
+    // An item still being captured has no facets to match on yet, so every active
+    // filter would drop it and the card the user just created would never appear.
+    // It stays visible until it has been read and can be judged on its merits.
+    const inFlight = (b) => window.collectionHelpers.isInFlight(b);
+
     if (activeCollection !== 'inspiration') {
       filtered = bookmarks.filter(b =>
-        window.collectionHelpers.matchesLibraryFilters(b, { q, topic: libraryTopicFilter, type: libraryTypeFilter })
+        inFlight(b) || window.collectionHelpers.matchesLibraryFilters(b, { q, topic: libraryTopicFilter, type: libraryTypeFilter })
       );
     } else {
       filtered = bookmarks.filter(b => {
+        if (inFlight(b)) return true;
         if (showFavoritesOnly && !b.favorite) return false;
         if (audience && b.meta?.audience !== audience) return false;
         if (form && b.meta?.form !== form) return false;
@@ -2285,28 +2413,107 @@ LLM_API_KEY=sk-…</pre>
 
   const HEART_SVG = `<svg viewBox="0 0 16 16"><path class="heart-outline" d="M8 13.5S2 9.5 2 5.5A3 3 0 0 1 8 4a3 3 0 0 1 6 1.5C14 9.5 8 13.5 8 13.5Z"/></svg>`;
 
+  // --- Capture lifecycle rendering ---
+  // State comes from one tested helper (collections-ui.itemRenderState) so the card,
+  // the list row and the modal can never disagree about what an item is doing.
+
+  const STATE_LABEL = { capturing: 'Capturing the page', reading: 'Reading it' };
+
+  function stateOf(b) { return window.collectionHelpers.itemRenderState(b); }
+
+  /** A ghost line at a given width; the stagger makes the card breathe as a unit. */
+  function ghostBar(width, delay = 0) {
+    return `<div class="ghost-bar" style="width:${width};animation-delay:${delay}ms"></div>`;
+  }
+
+  /** The status line shown where the AI takeaway will eventually sit. */
+  function stateNote(b, state) {
+    if (state === 'failed') {
+      // Never the raw reason: safeErrorReason allowlists the known user-safe set so a
+      // stack or a secret-bearing string can't reach a card.
+      const reason = window.collectionHelpers.safeErrorReason(b);
+      return `<div class="card-state is-failed"><span class="card-state-dot"></span>`
+        + `<span>${esc(reason.charAt(0).toUpperCase() + reason.slice(1))}.</span>`
+        + `<button class="card-retry" data-retry-id="${esc(b.id)}">Try again</button></div>`;
+    }
+    return `<div class="card-state"><span class="card-state-dot"></span><span>${STATE_LABEL[state]}</span></div>`;
+  }
+
+  /** Ghosted stand-ins for the fields enrichment has not filled yet. */
+  function ghostBody() {
+    return `<div class="card-tags ghost-tags" style="margin-top:8px">`
+      + ghostBar('54px', 0) + ghostBar('38px', 90) + ghostBar('46px', 180)
+      + `</div>`;
+  }
+
+  /** Wire the retry buttons a failed card renders. */
+  function bindRetryButtons(root) {
+    root.querySelectorAll('.card-retry').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        retryItem(btn.dataset.retryId, btn);
+      });
+    });
+  }
+
+  /**
+   * Re-run capture + enrichment for a failed item via the existing refetch route.
+   * The card returns to its in-flight state immediately; SSE drives it from there.
+   */
+  async function retryItem(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Retrying…'; }
+    const item = bookmarks.find(b => b.id === id);
+    if (item) { item.status = 'processing'; delete item.error_reason; applyFilters(); }
+    try {
+      const res = await fetch(window.collectionHelpers.refetchUrl(activeCollection, id), { method: 'POST' });
+      if (!res.ok) throw new Error('refetch failed');
+    } catch {
+      if (item) { item.status = 'error'; item.error_reason = 'could not start a retry'; applyFilters(); }
+    }
+  }
+
+
   function renderGrid() {
     const el = document.getElementById('grid-view');
     if (!filtered.length) { el.innerHTML = emptyState(bookmarks.length > 0); return; }
-    el.innerHTML = filtered.map(b => `
-      <div class="grid-card" data-id="${b.id}" style="position:relative">
-        ${b.screenshot
-          ? `<img class="card-screenshot" src="${shotSrc(b)}" alt="${esc(b.title)}" loading="lazy" />`
-          : `<div class="card-no-screenshot">No image</div>`}
+    el.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      // The image and title are whatever capture has already produced: at `reading`
+      // they are real and only the AI read is still ghosted, so the card fills in the
+      // order the data actually arrives instead of flipping from blank to complete.
+      const image = b.screenshot
+        ? `<img class="card-screenshot" src="${shotSrc(b)}" alt="${esc(b.title)}" loading="lazy" />`
+        : inFlight
+          ? `<div class="ghost-image"></div>`
+          : `<div class="card-no-screenshot">No image</div>`;
+      const title = b.title
+        ? `<div class="card-title">${esc(b.title)}</div>`
+        : `<div class="card-title" style="flex:1">${ghostBar('72%')}</div>`;
+      const badge = state === 'ready'
+        ? `<span class="tier-badge ${b.meta?.tier}">${TIER_LABELS[b.meta?.tier] || b.meta?.tier || ''}</span>`
+        : '';
+      const body = state === 'ready'
+        ? `<div class="card-steal">${esc(b.design?.steal_this || '')}</div>
+          <div class="card-tags">
+            ${(b.meta?.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}
+          </div>`
+        : `${stateNote(b, state)}${inFlight ? ghostBody() : ''}`;
+      return `
+      <div class="grid-card${inFlight ? ' is-inflight' : ''}" data-id="${b.id}" style="position:relative">
+        ${image}
         <button class="fav-btn${b.favorite ? ' active' : ''}" data-id="${b.id}" title="${b.favorite ? 'Unfavorite' : 'Favorite'}">${HEART_SVG}</button>
         <button class="more-btn" data-id="${b.id}" title="More">···</button>
         <div class="card-body">
           <div class="card-header">
-            <div class="card-title">${esc(b.title)}</div>
-            <span class="tier-badge ${b.meta?.tier}">${TIER_LABELS[b.meta?.tier] || b.meta?.tier || ''}</span>
+            ${title}
+            ${badge}
           </div>
-          <div class="card-steal">${esc(b.design?.steal_this || '')}</div>
-          <div class="card-tags">
-            ${(b.meta?.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}
-          </div>
+          ${body}
         </div>
       </div>
-    `).join('');
+    `;}).join('');
+    bindRetryButtons(el);
     el.querySelectorAll('.grid-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (!e.target.closest('.fav-btn')) openModal(card.dataset.id);
@@ -2323,8 +2530,11 @@ LLM_API_KEY=sk-…</pre>
   function renderList() {
     const el = document.getElementById('list-view');
     if (!filtered.length) { el.innerHTML = emptyState(bookmarks.length > 0); return; }
-    el.innerHTML = filtered.map(b => `
-      <div class="list-card" data-id="${b.id}">
+    el.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      return `
+      <div class="list-card${inFlight ? ' is-inflight' : ''}" data-id="${b.id}">
         <div style="display:flex;align-items:center;gap:8px">
           ${b.favorite ? `<div class="list-fav-dot" title="${esc(b.favorite_reason || 'Favorited')}"></div>` : '<div style="width:7px"></div>'}
           ${b.screenshot
@@ -2333,11 +2543,13 @@ LLM_API_KEY=sk-…</pre>
         </div>
         <div class="list-meta">
           <div>
-            <div class="list-name">${esc(b.title)}</div>
+            <div class="list-name">${b.title ? esc(b.title) : ghostBar('160px')}</div>
             <div class="list-url">${esc(hostname(b.url))}</div>
             <div class="list-category">${esc([b.meta?.audience, b.meta?.form, b.meta?.domain].filter(Boolean).join(' · '))} · ${b.meta?.tone?.join(', ') || ''}</div>
           </div>
-          <div class="list-steal">${esc(b.design?.steal_this || '')}</div>
+          ${state === 'ready'
+            ? `<div class="list-steal">${esc(b.design?.steal_this || '')}</div>`
+            : `<div class="list-steal">${stateNote(b, state)}</div>`}
           <div>
             <span class="tier-badge ${b.meta?.tier}">${TIER_LABELS[b.meta?.tier] || ''}</span>
           </div>
@@ -2349,7 +2561,8 @@ LLM_API_KEY=sk-…</pre>
           <button class="more-btn-list" data-id="${b.id}" title="More">···</button>
         </div>
       </div>
-    `).join('');
+    `;}).join('');
+    bindRetryButtons(el);
     el.querySelectorAll('.list-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (!e.target.closest('.more-btn-list')) openModal(card.dataset.id);
@@ -2366,8 +2579,11 @@ LLM_API_KEY=sk-…</pre>
     gridEl.style.display = 'none';
     listEl.style.display = 'block';
     if (!filtered.length) { listEl.innerHTML = emptyState(bookmarks.length > 0); return; }
-    listEl.innerHTML = filtered.map(b => `
-      <article class="lib-card" data-id="${b.id}">
+    listEl.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      return `
+      <article class="lib-card${inFlight ? ' is-inflight' : ''}" data-id="${b.id}">
         <button class="more-btn-list" data-id="${b.id}" title="More">···</button>
         <div class="lib-headline">
           <a class="lib-title" href="${esc(b.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(b.title || b.url)}</a>
@@ -2377,10 +2593,13 @@ LLM_API_KEY=sk-…</pre>
             ${b.author ? `<span class="lib-author">${esc(b.author)}</span>` : ''}
           </div>
         </div>
-        ${b.summary ? `<p class="lib-summary">${esc(b.summary)}</p>` : ''}
-        ${b.topics?.length ? `<div class="lib-topics">${b.topics.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+        ${state === 'ready'
+          ? `${b.summary ? `<p class="lib-summary">${esc(b.summary)}</p>` : ''}
+             ${b.topics?.length ? `<div class="lib-topics">${b.topics.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}`
+          : `${stateNote(b, state)}${inFlight ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${ghostBar('100%')}${ghostBar('88%', 90)}${ghostBar('42%', 180)}</div>` : ''}`}
       </article>
-    `).join('');
+    `;}).join('');
+    bindRetryButtons(listEl);
     listEl.querySelectorAll('.lib-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (!e.target.closest('.more-btn-list')) openLibraryModal(card.dataset.id);
@@ -2400,8 +2619,11 @@ LLM_API_KEY=sk-…</pre>
     listEl.style.display = 'none';
     gridEl.style.display = '';
     if (!filtered.length) { gridEl.innerHTML = emptyState(bookmarks.length > 0); return; }
-    gridEl.innerHTML = filtered.map(b => `
-      <div class="grid-card lib-grid-card" data-id="${b.id}">
+    gridEl.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      return `
+      <div class="grid-card lib-grid-card${inFlight ? ' is-inflight' : ''}" data-id="${b.id}">
         <button class="more-btn-list" data-id="${b.id}" title="More">···</button>
         <div class="card-body">
           <div class="card-header">
@@ -2409,11 +2631,14 @@ LLM_API_KEY=sk-…</pre>
             ${b.type ? `<span class="lib-type">${esc(b.type)}</span>` : ''}
           </div>
           <div class="lib-grid-host">${esc(hostname(b.url))}${b.author ? ` · ${esc(b.author)}` : ''}</div>
-          ${b.summary ? `<p class="lib-grid-summary">${esc(b.summary)}</p>` : ''}
-          ${b.topics?.length ? `<div class="lib-topics">${b.topics.slice(0, 6).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+          ${state === 'ready'
+            ? `${b.summary ? `<p class="lib-grid-summary">${esc(b.summary)}</p>` : ''}
+               ${b.topics?.length ? `<div class="lib-topics">${b.topics.slice(0, 6).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}`
+            : `${stateNote(b, state)}${inFlight ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${ghostBar('100%')}${ghostBar('80%', 90)}${ghostBar('50%', 180)}</div>` : ''}`}
         </div>
       </div>
-    `).join('');
+    `;}).join('');
+    bindRetryButtons(gridEl);
     gridEl.querySelectorAll('.lib-grid-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if (!e.target.closest('.more-btn-list')) openLibraryModal(card.dataset.id);
@@ -2522,6 +2747,10 @@ LLM_API_KEY=sk-…</pre>
     const favStar = `<button id="modal-fav" title="Favorite" style="background:none;border:none;cursor:pointer;font-size:22px;line-height:1;color:${item.favorite ? 'var(--accent,#f59e0b)' : 'var(--text-3)'}">${item.favorite ? '★' : '☆'}</button>`;
     const urlSafe = rh.isSafeUrl && rh.isSafeUrl(item.url);
 
+    // An item that is still being read, or that failed, says so here too — otherwise
+    // the modal is a wall of blank fields with no explanation (the reported bug).
+    const modalState = stateOf(item);
+
     const content = document.getElementById('modal-content');
     content.innerHTML = `
       ${item.screenshot ? `<img class="modal-screenshot" src="${shotSrc(item)}" alt="${esc(item.title || '')}">` : ''}
@@ -2532,6 +2761,7 @@ LLM_API_KEY=sk-…</pre>
         </div>
         ${item.url ? `<div class="modal-url">${urlSafe ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.url)}</a>` : `<span>${esc(item.url)}</span>`}${item.added ? ` · ${esc(item.added)}` : ''}</div>` : ''}
         ${tagsHtml}
+        ${modalState !== 'ready' ? `<div style="margin:12px 0">${stateNote(item, modalState)}</div>` : ''}
         ${lead ? `<div class="steal-this"><div class="field-label">${esc(lead.field.label)}</div><div class="field-value">${esc(String(lead.value))}</div></div>` : ''}
         ${displayHtml}
         ${editSection}
@@ -2544,6 +2774,7 @@ LLM_API_KEY=sk-…</pre>
     document.getElementById('modal-cancel').onclick = closeModal;
     document.getElementById('modal-save').onclick = () => saveItemEdits(item.id);
     document.getElementById('modal-fav').onclick = () => toggleItemFavorite(item.id);
+    bindRetryButtons(content);
     document.getElementById('modal-overlay').classList.add('open');
   }
 
@@ -2946,7 +3177,7 @@ LLM_API_KEY=sk-…</pre>
     agentBtn.disabled = true;
     closeAgentMenu();
     status.className = 'add-status';
-    status.textContent = '📸 Capturing…';
+    status.textContent = '';
 
     try {
       const res = await fetch(window.collectionHelpers.addUrl(activeCollection), {
@@ -2962,8 +3193,9 @@ LLM_API_KEY=sk-…</pre>
       }
       bookmarks.unshift(data);
       input.value = '';
-      status.textContent = `✓ Added ${data.title || data.url}`;
-      setTimeout(() => { status.textContent = ''; }, 3000);
+      // The card itself now shows capture progress, so the header stops narrating it;
+      // duplicating the state in two places just makes the chrome louder.
+      status.textContent = '';
       if (activeCollection === 'inspiration') buildTagCloud();
       else renderLibraryTopicCloud();
       applyFilters();
@@ -3406,8 +3638,8 @@ LLM_API_KEY=sk-…</pre>
   // load() is called by the module script below after collectionHelpers are initialized
 </script>
 <script type="module">
-  import { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
-  window.collectionHelpers = { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
+  import { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
+  window.collectionHelpers = { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
   // Story 7.2: generic descriptor-driven field renderer (Epic 8 wires it into the
   // descriptor-driven card/modal when the UI consumes the SQLite item model).
   import { renderField, renderFields, renderAsset, isSafeUrl } from './descriptor/render-map.js';

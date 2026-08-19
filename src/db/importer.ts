@@ -119,6 +119,25 @@ export interface ImportResult {
  * re-written — so re-running is idempotent AND user edits to existing items aren't
  * clobbered. Returns created/skipped counts + the created item ids.
  */
+/**
+ * Whether a mapped record already carries an AI read. Mirrors the frontend's
+ * `itemRenderState` so an item is never shown as loading when it has nothing left to
+ * load. Covers both legacy board shapes: Inspiration stores flat dotted keys
+ * (`meta.tier`), Library stores undotted ones (`summary`). A predicate that knows only
+ * one shape strands the other board's items at 'pending' forever.
+ */
+const ENRICHMENT_KEYS = ['meta.tier', 'design.steal_this', 'meta.tags', 'summary', 'topics', 'key_points'];
+
+function hasEnrichment(fields: unknown): boolean {
+  if (!fields || typeof fields !== 'object') return false;
+  const f = fields as Record<string, unknown>;
+  return ENRICHMENT_KEYS.some((k) => {
+    const v = f[k];
+    if (Array.isArray(v)) return v.length > 0;
+    return typeof v === 'string' ? v.length > 0 : v != null;
+  });
+}
+
 export async function importRecords({ handle, boardId, records }: ImportRecordsArgs): Promise<ImportResult> {
   const mapper = MAPPERS[boardId];
   if (!mapper) throw new Error(`No importer mapping registered for board "${boardId}"`);
@@ -137,7 +156,11 @@ export async function importRecords({ handle, boardId, records }: ImportRecordsA
       continue;
     }
     const { item, assets: itemAssets } = mapper(r, boardId);
-    await writeItem(handle, item, itemAssets);
+    // Imported records were enriched in the JSON era, so they arrive complete. Without
+    // this they inherit the schema default 'pending' and are indistinguishable from an
+    // item still being captured — which is exactly the signal the capture UI reads.
+    const status = hasEnrichment(item.fields) ? 'done' : item.status;
+    await writeItem(handle, { ...item, status }, itemAssets);
     result.created += 1;
     result.itemIds.push(id);
   }
