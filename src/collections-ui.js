@@ -411,3 +411,96 @@ export function isInFlight(item) {
   const state = itemRenderState(item);
   return state === "capturing" || state === "reading";
 }
+
+// --- Descriptor-driven card summary ----------------------------------------------
+// A tile has room for three things; a composed board can declare fifteen fields, and
+// the descriptor carries no display hint (see descriptor/render-map.js). So the card
+// picks its own headline from the board's content model: a category badge, a lead
+// line, and a chip row. This is what Inspiration's hardcoded card always showed
+// (tier badge / steal_this / tags) — expressed generically, so ANY board gets it.
+//
+// The selection rules deliberately MIRROR the detail modal (openItemModal): the
+// user's own fields (enrichable:false) belong to the modal's edit section, and the
+// lead is the first long-form text. A card and the modal it opens must never
+// disagree about what this item's headline is.
+
+/** Below this, a `text` field reads as a label (e.g. "vite.dev"), not as a summary. */
+const LEAD_MIN_CHARS = 50;
+const DEFAULT_MAX_TAGS = 6;
+
+/** Fields that are never card TEXT: the url is the card's link, the image its shot. */
+const CARD_SKIP_TYPES = new Set(["url", "image"]);
+
+function cardSlotsFrom(fields, item) {
+  let badge = null;
+  let longLead = null;
+  let shortLead = null;
+  const tags = [];
+  for (const field of fields) {
+    if (CARD_SKIP_TYPES.has(field.type)) continue;
+    const value = getFieldValue(item, field.key);
+    if (!hasValue(value)) continue;
+    if (field.type === "tags") {
+      for (const t of Array.isArray(value) ? value : [value]) {
+        if (hasValue(t)) tags.push(String(t));
+      }
+    } else if (field.type === "enum") {
+      if (!badge) badge = { key: field.key, label: field.label, value: String(value) };
+    } else if (field.type === "text") {
+      const text = String(value);
+      if (!longLead && text.length >= LEAD_MIN_CHARS) longLead = { key: field.key, label: field.label, value: text };
+      else if (!shortLead) shortLead = { key: field.key, label: field.label, value: text };
+    }
+  }
+  return { badge, lead: longLead ?? shortLead, tags };
+}
+
+function cardSlotsEmpty(slots) {
+  return !slots.badge && !slots.lead && slots.tags.length === 0;
+}
+
+/**
+ * The card's headline for one item, chosen from its board's descriptor.
+ *
+ * @returns {{ badge: {key,label,value}|null, lead: {key,label,value}|null, tags: string[] }}
+ *
+ * AI-filled fields are preferred; a board with NO enrichable fields (an all-manual
+ * collection) falls back to the user's own fields rather than rendering a blank tile.
+ */
+export function cardSummary(item, descriptor, opts = {}) {
+  const empty = { badge: null, lead: null, tags: [] };
+  if (!item || !descriptor || !Array.isArray(descriptor.fields)) return empty;
+
+  const enrichable = descriptor.fields.filter((f) => f.enrichable !== false);
+  let slots = cardSlotsFrom(enrichable, item);
+  // Nothing AI-filled to show — fall back to the whole descriptor so an all-manual
+  // board (or one whose enrichment hasn't landed) still gets a card with content.
+  if (cardSlotsEmpty(slots)) slots = cardSlotsFrom(descriptor.fields, item);
+
+  const maxTags = Number.isFinite(opts.maxTags) ? opts.maxTags : DEFAULT_MAX_TAGS;
+  return { badge: slots.badge, lead: slots.lead, tags: slots.tags.slice(0, maxTags) };
+}
+
+// --- Sort ---------------------------------------------------------------------------
+/**
+ * Order a board's items by recency. `added` carries only a DATE, so everything captured
+ * on the same day compares equal and the TIE-BREAK decides the order of most of a
+ * board. Incoming order is authoritative for that tie-break: the items API returns
+ * `created_at DESC`, so index 0 is the newest item.
+ *
+ * The previous inline comparator broke the tie the wrong way round (it returned
+ * `bi - ai` for "newest"), which put the oldest same-day item first — so on a board
+ * where everything was added today, "Recently added" listed it backwards.
+ *
+ * Returns a NEW array; the caller's list order is the recency reference and must survive.
+ */
+export function sortItems(items, sort) {
+  const oldestFirst = sort === "oldest";
+  const index = new Map(items.map((item, i) => [item, i]));
+  return [...items].sort((a, b) => {
+    const byDate = String(a.added ?? "").localeCompare(String(b.added ?? ""));
+    if (byDate !== 0) return oldestFirst ? byDate : -byDate;
+    const ai = index.get(a), bi = index.get(b);
+    return oldestFirst ? bi - ai : ai - bi;
+  });
+}

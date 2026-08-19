@@ -183,6 +183,9 @@ export function assertAnalysisAgentId(value: unknown): AnalysisAgentId {
   throw new Error(`Invalid analysis agent: ${String(value)}. Expected one of: ${ANALYSIS_AGENT_IDS.join(", ")}`);
 }
 
+/** The model Board asks the claude CLI for when the operator hasn't named one. */
+export const DEFAULT_CLAUDE_CLI_MODEL = "sonnet";
+
 export function resolveAnalysisAgent(
   requested?: unknown,
   env: NodeJS.ProcessEnv = process.env
@@ -191,8 +194,13 @@ export function resolveAnalysisAgent(
     ? assertAnalysisAgentId(env.BOARD_ANALYSIS_AGENT || "claude")
     : assertAnalysisAgentId(requested);
 
+  // Unset means `claude -p` inherits the operator's INTERACTIVE default, which on a
+  // subscription box is Opus — minutes and real money for a fixed-schema extraction.
+  // Pin Sonnet (floating alias, so it tracks the current Sonnet). codex is left
+  // unpinned: it has its own catalog and default. Mirrors resolveCliAgent in
+  // llm/select-provider.ts, which is the server's headless path.
   const model =
-    id === "claude" ? env.BOARD_CLAUDE_MODEL || null :
+    id === "claude" ? env.BOARD_CLAUDE_MODEL || DEFAULT_CLAUDE_CLI_MODEL :
     env.BOARD_CODEX_MODEL || null;
 
   return { id, model };

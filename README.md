@@ -34,7 +34,7 @@ the full annotated list). Empty/whitespace values are treated as unset.
 | `HOST` | `127.0.0.1` | Bind address. **Localhost-only by default** (see Security). |
 | `DATA_DIR` | `./data` | Persistent data root (SQLite DB + screenshots). |
 | `CHROME_PATH` | autodetect | System Chromium/Chrome binary; autodetected on Linux when unset. |
-| `LLM_AGENT` / `LLM_MODEL` / `LLM_BASE_URL` / `LLM_API_KEY` | unset | LLM provider. **Unset = no-AI** (enrichment disabled). |
+| `LLM_AGENT` / `LLM_MODEL` / `LLM_BASE_URL` / `LLM_API_KEY` | unset | LLM provider. **Unset = no-AI** (enrichment disabled). With `LLM_AGENT=claude` and no `LLM_MODEL`, Board asks the CLI for **Sonnet** rather than inheriting your interactive default. |
 | `CAPTURE_TIMEOUT_MS` | `180000` | Budget for one capture job — page capture **and** the AI read share it. A CLI agent routinely takes 90–100s; raise it for slow local models. |
 | `BOARD_API_TOKEN` | unset | Bearer token for the `/api/v1` capture API. **Unset = the v1 API is off** (fail-closed). See [Integrations](docs/integrations.md). |
 

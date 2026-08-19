@@ -1,7 +1,13 @@
-import type { Config } from '../config.js';
+import type { Config, ProviderConfig } from '../config.js';
 import { disabledLlm, type LLMProvider } from '../skills/types.js';
 import { HttpProvider } from './http-provider.js';
-import { CliProvider } from './cli-provider.js';
+import { CliProvider, type CliAgent } from './cli-provider.js';
+// The claude-CLI model default. Shared with add.ts's `resolveAnalysisAgent` (the
+// `npm run add` path) so BOTH headless callers ask for the same model — `claude -p`
+// with no `--model` would otherwise inherit the operator's interactive default (Opus
+// on a subscription box): minutes and real money for a fixed-schema extraction.
+// A floating alias, not a dated id, so it tracks the current Sonnet.
+import { DEFAULT_CLAUDE_CLI_MODEL } from '../add.js';
 
 // Story 4.4 — pick the LLM transport from config, with a NO-AI DEFAULT.
 //
@@ -24,10 +30,25 @@ export function selectProvider(config: Config): LLMProvider {
   }
 
   if (p.agent === 'claude' || p.agent === 'codex') {
-    return new CliProvider({ agent: { id: p.agent, model: p.model } });
+    return new CliProvider({ agent: resolveCliAgent(p) as CliAgent });
   }
 
   return disabledLlm;
+}
+
+/**
+ * Resolve the CLI agent (id + model) for `CliProvider`. Split out from
+ * `selectProvider` so the model default is testable on its own and — critically —
+ * lands ONLY on the CLI path: defaulting `provider.model` in `loadConfig` would make
+ * a base-URL-only install satisfy `baseUrl && model` above and silently point an
+ * HttpProvider at a model that host has never heard of.
+ *
+ * `codex` is left unpinned: it has its own model catalog and its own default.
+ */
+export function resolveCliAgent(p: ProviderConfig): { id: 'claude' | 'codex'; model: string | null } {
+  const id = p.agent as 'claude' | 'codex';
+  if (p.model) return { id, model: p.model };
+  return { id, model: id === 'claude' ? DEFAULT_CLAUDE_CLI_MODEL : null };
 }
 
 export interface ProviderInfo {
@@ -37,8 +58,11 @@ export interface ProviderInfo {
   label: string;
 }
 
+// The user-facing provider name, interpolated into "Add with {label}" and
+// "Using {label}". Kept to the product name alone — the extra "Code" bought nothing
+// in either sentence and cost header width the board switcher needs.
 const CLI_AGENT_LABELS: Record<'claude' | 'codex', string> = {
-  claude: 'Claude Code',
+  claude: 'Claude',
   codex: 'Codex',
 };
 

@@ -60,8 +60,11 @@ test("validateAnalysis rejects invalid taxonomy and array sizes", () => {
   );
 });
 
-test("resolveAnalysisAgent defaults to Claude Code", () => {
-  assert.deepEqual(resolveAnalysisAgent(undefined, {}), { id: "claude", model: null });
+test("resolveAnalysisAgent defaults to Claude Code on Sonnet", () => {
+  // No --model means `claude -p` inherits the operator's interactive default (Opus on a
+  // subscription box) for what is a schema-shaped extraction. Pin Sonnet, same as the
+  // server path (llm/select-provider resolveCliAgent), so both headless callers agree.
+  assert.deepEqual(resolveAnalysisAgent(undefined, {}), { id: "claude", model: "sonnet" });
 });
 
 test("resolveAnalysisAgent supports requested agents and env model overrides", () => {
