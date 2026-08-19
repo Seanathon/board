@@ -19,6 +19,14 @@ export interface StatusEvent {
    */
   title?: string;
   screenshot?: string;
+  /**
+   * 1-based place in the job line, on transitions for an item that is enqueued but has
+   * not started. Absent once the job begins — the client CLEARS it on absence rather
+   * than only assigning it when present, so a card can't be stranded showing a stale
+   * position. The line is global (one worker for all boards), so position 2 means two
+   * captures ahead of you anywhere, not on this board.
+   */
+  queuePosition?: number;
 }
 
 /** A minimal write sink (the SSE response stream). */

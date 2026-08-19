@@ -69,6 +69,52 @@ export function enqueueWrite<T>(fn: () => T | Promise<T>): Promise<T> {
 // Concurrency 1 is load-bearing: Chromium is ~400-520MB resident, so two concurrent
 // captures OOM the 512MB-1GB LXC (NFR-1/C1).
 
+// --- The visible job line -------------------------------------------------------
+//
+// Item ids whose job is enqueued but has not started, in line order. Purely for
+// telling the user where they stand: jobs run one at a time, so a second add waits on
+// the first, and the card used to say "Capturing the page" the whole time — a claim
+// about work that had not begun.
+//
+// Tracked HERE rather than derived from `status='pending'` in SQL, because pending is
+// not the same thing as queued: an item with no source, a manual-upload board, or an
+// unregistered ingest_mode stays pending forever with no job behind it, and would
+// inflate everyone else's position permanently.
+//
+// Caveat: `runSnapshotJob` calls `enqueueJob` directly, so an archival snapshot holds
+// the lane without appearing here — "next up" can wait out one. Snapshots are opt-in
+// and status-neutral, so this is left as a known imprecision rather than plumbed.
+const jobLine: string[] = [];
+
+function joinJobLine(itemId: string): void {
+  if (!jobLine.includes(itemId)) jobLine.push(itemId);
+}
+
+function leaveJobLine(itemId: string): void {
+  const i = jobLine.indexOf(itemId);
+  if (i !== -1) jobLine.splice(i, 1);
+}
+
+/** 1-based place in the line, or undefined when this item isn't waiting. */
+export function jobLinePositionOf(itemId: string): number | undefined {
+  const i = jobLine.indexOf(itemId);
+  return i === -1 ? undefined : i + 1;
+}
+
+/**
+ * Re-announce every waiting item's position. Called when the line changes (someone
+ * joins, or someone's turn arrives and the rest move up). The item's real DB status is
+ * published alongside — `pending` — so the client never has to learn a status value
+ * that isn't in the schema; the position is the only new information.
+ */
+function publishJobLine(handle: DbHandle): void {
+  jobLine.forEach((id, i) => {
+    const row = handle.db.select().from(items).where(eq(items.id, id)).get();
+    if (!row) return;
+    statusHub.publish({ itemId: id, boardId: row.boardId, status: row.status, queuePosition: i + 1 });
+  });
+}
+
 /** A schedulable unit of work. `run` receives an AbortSignal it must honor. */
 export interface Job {
   type: string;
@@ -303,6 +349,9 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
     timeoutMs: args.timeoutMs,
     teardown: args.teardown,
     run: async (signal) => {
+      // Our turn: leave the line, then tell everyone behind us they moved up.
+      leaveJobLine(args.itemId);
+      publishJobLine(handle);
       setItemStatusDirect(handle, args.itemId, 'processing', null);
       try {
         await args.work(signal);
@@ -323,7 +372,13 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
     },
   };
 
+  // Join the line BEFORE enqueueing, and announce it, so the card the user just added
+  // says what it is actually doing instead of claiming to be capturing.
+  joinJobLine(args.itemId);
+  publishJobLine(handle);
+
   const result = await enqueueJob(job, { timeoutFn: args.timeoutFn });
+  leaveJobLine(args.itemId); // no-op on the normal path; a belt-and-braces cleanup
 
   // Timeout: the work was abandoned (possibly still `processing`) — record the
   // terminal error status through the writer so the item is never stuck.

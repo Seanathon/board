@@ -2617,6 +2617,11 @@ LLM_API_KEY=sk-…</pre>
       item.status = event.status;
       if (event.error_reason !== undefined) item.error_reason = event.error_reason;
       else delete item.error_reason;
+      // Cleared on absence, not just set when present: the `processing` transition
+      // carries no position, and a stale one would leave the card saying it is queued
+      // for the whole capture (itemRenderState keys the queued state on this).
+      if (event.queuePosition != null) item.queuePosition = event.queuePosition;
+      else delete item.queuePosition;
       if (event.fields && typeof event.fields === 'object') {
         // `fields` arrives flat and dotted ("meta.tier"); the renderers read it nested.
         for (const [key, value] of Object.entries(event.fields)) {
@@ -3666,7 +3671,22 @@ LLM_API_KEY=sk-…</pre>
   // State comes from one tested helper (collections-ui.itemRenderState) so the card,
   // the list row and the modal can never disagree about what an item is doing.
 
-  const STATE_LABEL = { capturing: 'Capturing the page', reading: 'Reading it' };
+  const STATE_LABEL = { queued: 'Waiting its turn', capturing: 'Capturing the page', reading: 'Reading it' };
+
+  /**
+   * What a waiting card says. Captures run one at a time, so the honest answer is
+   * where you are in line rather than a claim that anything is happening yet. The
+   * line is global (one worker across all boards), so the copy deliberately avoids
+   * implying "on this board". Falls back to the plain label when the position is
+   * missing — a reload before the first SSE frame, say.
+   */
+  const ORDINALS = ['', 'next', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th'];
+  function queueLabel(b) {
+    const pos = b && b.queuePosition;
+    if (!pos) return STATE_LABEL.queued;
+    if (pos === 1) return 'Next up';
+    return `Queued, ${ORDINALS[pos] || pos + 'th'} in line`;
+  }
 
   function stateOf(b) { return window.collectionHelpers.itemRenderState(b); }
 
@@ -3685,7 +3705,8 @@ LLM_API_KEY=sk-…</pre>
         + `<span>${esc(reason.charAt(0).toUpperCase() + reason.slice(1))}.</span>`
         + `<button class="card-retry" data-retry-id="${esc(b.id)}">Try again</button></div>`;
     }
-    return `<div class="card-state"><span class="card-state-dot"></span><span>${STATE_LABEL[state]}</span></div>`;
+    const label = state === 'queued' ? queueLabel(b) : STATE_LABEL[state];
+    return `<div class="card-state"><span class="card-state-dot"></span><span>${esc(label)}</span></div>`;
   }
 
   /**
