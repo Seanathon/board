@@ -317,6 +317,21 @@ test("applySseEvent fills the card on a done event (fields from payload)", () =>
   assert.deepEqual(next.fields, { a: 1, b: 2 }, "fields merged from the SSE payload (no refetch)");
 });
 
+// The position must CLEAR when absent, not merely be assigned when present: the
+// `processing` transition carries no position, and a stale one left behind would keep
+// the card reading as queued for the whole capture (itemRenderState keys on it).
+test("applySseEvent carries a queue position and clears it on leaving the line", () => {
+  const card = { id: "i1", status: "pending" };
+  const queued = applySseEvent(card, { itemId: "i1", status: "pending", queuePosition: 2 });
+  assert.equal(queued.queuePosition, 2);
+
+  const moved = applySseEvent(queued, { itemId: "i1", status: "pending", queuePosition: 1 });
+  assert.equal(moved.queuePosition, 1, "position updates as the line advances");
+
+  const started = applySseEvent(moved, { itemId: "i1", status: "processing" });
+  assert.equal(started.queuePosition, undefined, "no position on the event → cleared");
+});
+
 test("applySseEvent sets error state on an error event", () => {
   const card = { id: "i1", status: "processing", fields: {} };
   const next = applySseEvent(card, { itemId: "i1", status: "error", error_reason: "timed out" });
@@ -470,6 +485,29 @@ test("itemRenderState: a finished item is ready", () => {
 test("itemRenderState: a freshly added item with nothing captured yet is capturing", () => {
   assert.equal(itemRenderState({ status: "pending", title: "", url: "https://x" }), "capturing");
   assert.equal(itemRenderState({ status: "processing", title: "", url: "https://x" }), "capturing");
+});
+
+// Jobs run one at a time, so a second add sits in line while the first captures. It
+// used to render "Capturing the page" — a claim about work that had not started.
+// Keyed on `queuePosition`, NOT on `status`: `pending` with no job behind it is a real
+// persistent state (manual-upload boards, a missing source, an unregistered
+// ingest_mode, and the legacy imports above), and the in-memory line is empty after a
+// restart. No position → fall through to the old behaviour rather than claim a queue
+// that isn't there.
+test("itemRenderState: an item waiting its turn in the job line is queued", () => {
+  assert.equal(itemRenderState({ status: "pending", title: "", url: "https://x", queuePosition: 2 }), "queued");
+  // position 1 is still WAITING — the job has not started until the status flips
+  assert.equal(itemRenderState({ status: "pending", title: "", url: "https://x", queuePosition: 1 }), "queued");
+  // no position → unchanged, so a stale-pending item never regresses into a fake queue
+  assert.equal(itemRenderState({ status: "pending", title: "", url: "https://x" }), "capturing");
+  // an item that already carries its AI read is still ready — never ghost real content
+  assert.equal(itemRenderState({ status: "pending", title: "Mastra", meta: { tier: "reference" }, queuePosition: 3 }), "ready");
+});
+
+// A queued card must survive the active filters exactly like a capturing one: it has no
+// facets to match on yet, so `isInFlight` false would drop the card the user just added.
+test("isInFlight: a queued item still counts as in flight", () => {
+  assert.equal(isInFlight({ status: "pending", title: "", url: "https://x", queuePosition: 2 }), true);
 });
 
 test("itemRenderState: capture landed but the AI read has not is reading", () => {

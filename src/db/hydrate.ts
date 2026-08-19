@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 
 import { assets, items, type Item, type Asset } from './schema.js';
+import { jobLinePositionOf } from './queue.js';
 import type { DbHandle } from './index.js';
 
 // Story 8.x cutover — present a SQLite item in the shape the (polished, prototype)
@@ -19,6 +20,12 @@ export function hydrateItemForUi(item: Item, itemAssets: Asset[] = []): Record<s
     added: item.createdAt ? new Date(item.createdAt * 1000).toISOString().slice(0, 10) : '',
   };
   if (item.errorReason) out.error_reason = item.errorReason;
+
+  // Where it stands in the job line, so a reload mid-queue keeps saying "3rd in line"
+  // instead of falling back to "Capturing the page". Undefined for anything not
+  // waiting, which is every item on a normal load.
+  const queuePosition = jobLinePositionOf(item.id);
+  if (queuePosition !== undefined) out.queuePosition = queuePosition;
 
   // The card/modal image: a real screenshot (url-screenshot boards) or, failing that,
   // the page's hero image (og:image, captured for readable boards). Either one fills the

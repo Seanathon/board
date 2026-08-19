@@ -109,6 +109,11 @@ export function applySseEvent(card, event) {
     next.fields = { ...(card.fields || {}), ...event.fields };
   }
   if (event.error_reason !== undefined) next.errorReason = event.error_reason;
+  // Cleared, not just assigned-when-present: the `processing` transition carries no
+  // position, and a stale one would leave the card claiming to be queued for the whole
+  // capture (itemRenderState keys the queued state on this).
+  if (event.queuePosition != null) next.queuePosition = event.queuePosition;
+  else delete next.queuePosition;
   return next;
 }
 
@@ -401,15 +406,27 @@ export function itemRenderState(item) {
   if (item.status === "error") return "failed";
   if (item.status !== "pending" && item.status !== "processing") return "ready";
   if (hasAiRead(item)) return "ready";
+  // Jobs run one at a time, so an add made while another is capturing sits in line.
+  // Keyed on the POSITION, not on `status`: `pending` with no job behind it is a real
+  // persistent state (manual-upload boards, missing source, unregistered ingest_mode,
+  // legacy imports) and the in-memory line is empty after a restart — in all of those
+  // there is no position, and we fall through rather than claim a queue that isn't
+  // there. Ranked below `hasAiRead` so a re-queued item that already has its read
+  // keeps showing content instead of reverting to a skeleton.
+  if (item.queuePosition != null) return "queued";
   // Capture writes title + screenshot before enrichment runs, so either one means
   // the page is in hand and only the AI read is outstanding.
   return item.title || item.screenshot ? "reading" : "capturing";
 }
 
-/** True while an item is still being captured or read (skeleton showing). */
+/**
+ * True while an item is still being captured or read (skeleton showing). `queued`
+ * counts: an item waiting its turn has no facets to match on yet, and applyFilters
+ * leans on this to keep the just-added card visible instead of filtering it away.
+ */
 export function isInFlight(item) {
   const state = itemRenderState(item);
-  return state === "capturing" || state === "reading";
+  return state === "queued" || state === "capturing" || state === "reading";
 }
 
 // --- Descriptor-driven card summary ----------------------------------------------
