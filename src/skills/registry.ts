@@ -9,6 +9,8 @@ import { composeBoardSkill } from './compose-board.js';
 import { composeCollectionSkill } from './compose-collection.js';
 import { generateFieldsSkill } from './generate-fields.js';
 import { exportSkill } from './export.js';
+import { importDocumentSkill } from './import-document.js';
+import { wipeItemsSkill } from './wipe-items.js';
 import type { Skill } from './types.js';
 
 // Story 3.1 — the skill registry. A FACTORY (not a module-global Map) so each
@@ -63,4 +65,6 @@ export function registerAllSkills(registry: SkillRegistry): void {
   registry.register(composeCollectionSkill); // Story 15.2
   registry.register(generateFieldsSkill); // Story 10.3
   registry.register(exportSkill); // Story 17.1
+  registry.register(importDocumentSkill); // data portability: the other half of export
+  registry.register(wipeItemsSkill); // data portability: "start from a fresh state"
 }

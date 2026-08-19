@@ -32,6 +32,9 @@ import { buildCtx, type JobQueue, type LLMProvider, type Logger } from "./skills
 import { selectProvider, describeProvider } from "./llm/select-provider.js";
 import { disabledLlm } from "./skills/types.js";
 import { startSseStream } from "./sse.js";
+import { pipeline } from "node:stream/promises";
+import { createArchiveStream, extractArchive } from "./db/archive.js";
+import { importDocumentSkill } from "./skills/import-document.js";
 import { registerV1Api, sha256Hex } from "./api/v1.js";
 import { buildBookmarklet, TOKEN_PLACEHOLDER } from "./capture-clients/bookmarklet.js";
 import { captureRegistry, registerAllCaptureAdapters } from "./capture/adapter.js";
@@ -366,6 +369,48 @@ export async function buildServer(opts: BuildServerOptions = {}) {
       ext === ".webp" ? "image/webp" : "application/octet-stream";
     reply.type(type);
     return reply.send(fs.createReadStream(abs));
+  });
+
+  // --- Backup: the whole collection as a streamed tar (metadata + image bytes) ---
+  // Named "backup", not "archive": `archive` already means page-snapshot archival here.
+  // Registered in its own plugin scope so the raw-body parser and the large body limit
+  // apply ONLY to the restore route and never loosen the rest of the API.
+  await app.register(async (backupApp) => {
+    // Hand the request stream through untouched — a restore can be hundreds of MB and
+    // must never be buffered into a string.
+    backupApp.addContentTypeParser("application/x-tar", (_req, payload, done) => {
+      done(null, payload);
+    });
+
+    backupApp.get("/api/backup", async (_req, reply) => {
+      const stamp = new Date().toISOString().slice(0, 10);
+      reply.header("Content-Type", "application/x-tar");
+      reply.header("Content-Disposition", `attachment; filename="board-backup-${stamp}.tar"`);
+      return reply.send(createArchiveStream(opts.db ?? getDb(), screenshotsDir));
+    });
+
+    backupApp.post(
+      "/api/backup",
+      // A restore is inherently large; the global 20MB limit would reject a real one.
+      { bodyLimit: 4 * 1024 * 1024 * 1024 },
+      async (req, reply) => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "board-restore-"));
+        const tmpTar = path.join(tmpDir, "upload.tar");
+        try {
+          await pipeline(req.body as NodeJS.ReadableStream, fs.createWriteStream(tmpTar));
+          const { document, filesRestored } = await extractArchive(tmpTar, screenshotsDir);
+          const handle = opts.db ?? getDb();
+          const ctx = buildCtx({ db: handle, queue, logger, llm });
+          const result = await importDocumentSkill.run({ document }, ctx);
+          return { ...result, filesRestored };
+        } catch (err) {
+          reply.status(400);
+          return { error: (err as Error).message };
+        } finally {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+      },
+    );
   });
 
   // Story 5.3: live status stream (native SSE; poll fallback is the items API).

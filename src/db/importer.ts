@@ -93,6 +93,60 @@ function mapLibrary(r: RawRecord, boardId: string): Mapped {
   return { item, assets: [] };
 }
 
+/**
+ * System keys that live in item COLUMNS, not in the `fields` bag. Kept in sync with
+ * export's `toRecord`, which is the shape the generic mapper reverses.
+ */
+const SYSTEM_RECORD_KEYS = new Set([
+  'id', 'url', 'title', 'status', 'favorite', 'notes',
+  'analysis_agent', 'analysis_model', 'added', 'screenshot',
+]);
+
+/**
+ * Board-agnostic record → item. The exact inverse of export's `toRecord`: system keys
+ * become columns, every nested group re-flattens to dotted field keys, and remaining
+ * scalars/arrays pass through untouched.
+ *
+ * This is what makes an export re-importable. The two hand-written mappers below stay
+ * for the legacy flat files (bookmarks.json / library.json), whose shape predates the
+ * descriptor and whose field selection must not change; every OTHER board — including
+ * every composed one — lands here instead of throwing "no mapping registered".
+ */
+function mapGeneric(r: RawRecord, boardId: string): Mapped {
+  const id = String(r.id);
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(r)) {
+    if (SYSTEM_RECORD_KEYS.has(key)) continue;
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'object' && !Array.isArray(value)) {
+      flattenGroup(fields, key, value);
+    } else {
+      fields[key] = value;
+    }
+  }
+
+  const item: NewItem = {
+    id,
+    boardId,
+    source: typeof r.url === 'string' ? r.url : null,
+    title: typeof r.title === 'string' ? r.title : null,
+    favorite: r.favorite ? 1 : 0,
+    notes: typeof r.notes === 'string' ? r.notes : null,
+    fields,
+    analysisProvider: typeof r.analysis_agent === 'string' ? r.analysis_agent : null,
+    analysisModel: typeof r.analysis_model === 'string' ? r.analysis_model : null,
+    createdAt: parseAdded(r.added),
+  };
+  if (typeof r.status === 'string' && r.status.length > 0) item.status = r.status;
+
+  const itemAssets: NewAsset[] =
+    typeof r.screenshot === 'string' && r.screenshot.length > 0
+      ? [{ id: `${id}-screenshot`, itemId: id, kind: 'screenshot', path: r.screenshot }]
+      : [];
+
+  return { item, assets: itemAssets };
+}
+
 type Mapper = (r: RawRecord, boardId: string) => Mapped;
 
 const MAPPERS: Record<string, Mapper> = {
@@ -139,8 +193,7 @@ function hasEnrichment(fields: unknown): boolean {
 }
 
 export async function importRecords({ handle, boardId, records }: ImportRecordsArgs): Promise<ImportResult> {
-  const mapper = MAPPERS[boardId];
-  if (!mapper) throw new Error(`No importer mapping registered for board "${boardId}"`);
+  const mapper = MAPPERS[boardId] ?? mapGeneric;
   const result: ImportResult = { created: 0, skipped: 0, itemIds: [] };
   for (const [i, r] of records.entries()) {
     // Fail loud on a missing id — it is the idempotency/dedupe key. Without this,

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildServer, getListenOptions, warnIfExposed } from "./server.js";
 import { loadConfig } from "./config.js";
 import { BOOKMARKS_FILE, saveCollection } from "./storage.js";
+import { eq } from "drizzle-orm";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -865,5 +866,71 @@ test("16.3: GET /api/archive/footprint reports snapshot-only bytes + count (read
   } finally {
     handle.sqlite.close();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Backup (streamed tar export/restore) ---
+// Named "backup", not "archive": in this codebase `archive` already means the
+// page-snapshot archival feature (/api/archive/footprint, archive-backfill).
+
+test("GET /api/backup streams a tar backup; POST /api/backup restores it", async () => {
+  // The round trip that makes an export a real backup: metadata AND image bytes, over
+  // a transport that does not depend on holding ~110MB in a browser string.
+  const { initDb } = await import("./db/index.js");
+  const { seed } = await import("./db/seed.js");
+  const { writeItem } = await import("./db/queue.js");
+  const { boards, items } = await import("./db/schema.js");
+
+  const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-arcsrc-"));
+  const srcShots = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-arcshots-"));
+  const src = initDb(path.join(srcDir, "s.db"));
+  seed(src.db);
+  try {
+    src.db.insert(boards).values({ id: "wishlist", name: "Wish List", view: "grid", descriptor: { name: "Wish List", fields: [], view: "grid", ingest_mode: "url-screenshot" } as any }).run();
+    fs.writeFileSync(path.join(srcShots, "w1.png"), Buffer.alloc(300, 3));
+    await writeItem(src, { id: "w1", boardId: "wishlist", source: "https://example.com/w", title: "W" },
+      [{ id: "w1-shot", itemId: "w1", kind: "screenshot", path: "screenshots/w1.png" }]);
+
+    const srcApp = await buildServer({ db: src, screenshotsDir: srcShots });
+    const dl = await srcApp.inject({ method: "GET", url: "/api/backup" });
+    assert.equal(dl.statusCode, 200);
+    assert.match(String(dl.headers["content-disposition"]), /attachment; filename=/);
+    const tar = dl.rawPayload;
+    assert.ok(tar.length % 512 === 0, "a tar is whole 512-byte blocks");
+    assert.equal(tar.subarray(257, 262).toString(), "ustar");
+
+    // Restore into a DIFFERENT, empty install.
+    const destDir = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-arcdest-"));
+    const destShots = fs.mkdtempSync(path.join(os.tmpdir(), "board-oss-arcdshots-"));
+    const dest = initDb(path.join(destDir, "d.db"));
+    try {
+      const destApp = await buildServer({ db: dest, screenshotsDir: destShots });
+      const up = await destApp.inject({
+        method: "POST", url: "/api/backup",
+        headers: { "content-type": "application/x-tar" },
+        payload: tar,
+      });
+      assert.equal(up.statusCode, 200, up.body);
+      const body = JSON.parse(up.body) as any;
+      assert.ok(body.boardsCreated >= 4, "every board is recreated on the empty install");
+      assert.equal(body.itemsCreated, 1);
+      assert.equal(body.filesRestored, 1, "the image bytes travel too");
+
+      const row = dest.db.select().from(items).where(eq(items.id, "w1")).get();
+      assert.ok(row, "the composed board item exists after restore");
+      assert.ok(fs.existsSync(path.join(destShots, "w1.png")), "the screenshot file lands in the new install");
+
+      // And the restored image actually serves (this is what 'not a backup' used to break).
+      const served = await destApp.inject({ method: "GET", url: "/screenshots/w1.png" });
+      assert.equal(served.statusCode, 200);
+    } finally {
+      dest.sqlite.close();
+      fs.rmSync(destDir, { recursive: true, force: true });
+      fs.rmSync(destShots, { recursive: true, force: true });
+    }
+  } finally {
+    src.sqlite.close();
+    fs.rmSync(srcDir, { recursive: true, force: true });
+    fs.rmSync(srcShots, { recursive: true, force: true });
   }
 });

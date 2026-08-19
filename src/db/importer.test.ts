@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { eq } from 'drizzle-orm';
 
 import { initDb } from './index.js';
-import { items, assets } from './schema.js';
+import { items, assets, boards } from './schema.js';
 import { seed, INSPIRATION_BOARD_ID, LIBRARY_BOARD_ID } from './seed.js';
 import { importFlatJson, importRecords } from './importer.js';
 
@@ -186,6 +186,62 @@ describe('imported item status', () => {
       });
       const row = handle.db.select().from(items).where(eq(items.id, 'lib-1')).get();
       assert.equal(row?.status, 'done', 'an enriched library import must not sit at pending');
+    } finally {
+      handle.sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// A composed board has no hand-written mapper, so importRecords used to throw
+// `No importer mapping registered` — meaning export emitted boards that nothing
+// could read back. The generic mapper is the inverse of export's toRecord: system
+// columns are lifted, and any nested group is re-flattened to dotted field keys.
+describe('generic mapper (any board, not just the seeded two)', () => {
+  it('round-trips an exported record into a composed board', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-oss-generic-map-'));
+    const handle = initDb(join(dir, 'c.db'));
+    try {
+      seed(handle.db);
+      handle.db.insert(boards).values({
+        id: 'wishlist', name: 'Wish List', view: 'grid',
+        descriptor: { name: 'Wish List', fields: [], view: 'grid', ingest_mode: 'url-screenshot' } as never,
+      }).run();
+
+      await importRecords({
+        handle,
+        boardId: 'wishlist',
+        records: [{
+          id: 'w1',
+          url: 'https://example.com/thing',
+          title: 'A Thing',
+          favorite: true,
+          notes: 'mine',
+          added: '2026-01-02T00:00:00.000Z',
+          analysis_agent: 'claude',
+          screenshot: 'screenshots/w1.png',
+          gift: { price: 42, store: 'somewhere' },
+          priority: 'high',
+        }],
+      });
+
+      const row = handle.db.select().from(items).where(eq(items.id, 'w1')).get();
+      assert.ok(row, 'the item must be created on a board with no hand-written mapper');
+      assert.equal(row.title, 'A Thing');
+      assert.equal(row.source, 'https://example.com/thing');
+      assert.equal(row.favorite, 1);
+      assert.equal(row.notes, 'mine');
+      assert.equal(row.analysisProvider, 'claude');
+      const f = row.fields as Record<string, unknown>;
+      assert.equal(f['gift.price'], 42, 'nested groups re-flatten to dotted keys');
+      assert.equal(f['gift.store'], 'somewhere');
+      assert.equal(f['priority'], 'high', 'top-level custom fields survive');
+      assert.equal(f['url'], undefined, 'system columns must not leak into fields');
+      assert.equal(f['screenshot'], undefined);
+
+      const shots = handle.db.select().from(assets).where(eq(assets.itemId, 'w1')).all();
+      assert.equal(shots.length, 1, 'the screenshot asset is recreated');
+      assert.equal(shots[0].path, 'screenshots/w1.png');
     } finally {
       handle.sqlite.close();
       rmSync(dir, { recursive: true, force: true });
