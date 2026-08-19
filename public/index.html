@@ -883,6 +883,25 @@
     .data-note { font-size: 12px; color: var(--text-3); line-height: 1.5; }
     .data-file { font-size: 12px; color: var(--text-2); }
 
+    /* A file input cannot be styled, so the real control is visually hidden and a
+       label carries the button vocabulary. Hidden by clipping, NOT display:none —
+       the latter drops it out of the tab order and makes the control unreachable by
+       keyboard. The focus ring is forwarded from the input to the label. */
+    .file-pick input[type="file"] {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .file-pick label { display: inline-block; }
+    .file-pick input[type="file"]:focus-visible + label {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
     /* The one destructive path in the app. It stays visually quiet until armed, then
        states the consequence in plain words and demands a typed confirmation — a
        checkbox alone is too easy to tick past. */
@@ -3780,9 +3799,12 @@ LLM_API_KEY=sk-…</pre>
       setTimeout(() => { exportNote.textContent = 'Saved to your downloads.'; }, 1500);
     });
 
+    const importLabel = document.getElementById('data-import-label');
     fileInput.addEventListener('change', () => {
       const f = fileInput.files && fileInput.files[0];
-      importBtn.disabled = !f;
+      importBtn.disabled = !f || fresh.checked;
+      // The native control showed the filename itself; the styled label has to say it.
+      importLabel.textContent = f ? 'Choose a different file' : 'Choose a file';
       importNote.textContent = f ? `${f.name} · ${(f.size / 1048576).toFixed(1)} MB` : '';
       updateWipeArm();
     });
@@ -3953,8 +3975,11 @@ LLM_API_KEY=sk-…</pre>
             <h4>Bring it back</h4>
             <p>Restore a backup, on this machine or a new one. Anything already here is left untouched: boards keep their own fields, and items you already have are skipped rather than rewritten.</p>
             <div class="data-row">
-              <input type="file" id="data-import-file" accept=".tar,application/x-tar" class="data-file">
-              <button type="button" class="btn btn-ghost" id="data-import" disabled>Restore</button>
+              <span class="file-pick">
+                <input type="file" id="data-import-file" accept=".tar,application/x-tar">
+                <label class="btn btn-ghost" for="data-import-file" id="data-import-label">Choose a file</label>
+              </span>
+              <button type="button" class="btn btn-primary" id="data-import" disabled>Restore</button>
             </div>
             <div class="data-note" id="data-import-note" style="margin-top:10px"></div>
 
