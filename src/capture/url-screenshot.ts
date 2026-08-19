@@ -36,7 +36,11 @@ const SETTLE_TIMEOUT_MS = 30_000;
 export interface CapturePage {
   setViewport(vp: { width: number; height: number; deviceScaleFactor: number }): Promise<unknown>;
   goto(url: string, opts: { waitUntil: string; timeout: number }): Promise<unknown>;
-  /** Optional so existing fakes stay valid; absent → the settle wait is skipped. */
+  /**
+   * Optional ONLY so hand-written test fakes stay valid. Real captures always take the
+   * settle path: puppeteer's Page has had this since v5 and we pin ^24. Don't read the
+   * `?.` at the call site as "this might not run in production" — it always does.
+   */
   waitForNetworkIdle?(opts: { idleTime: number; timeout: number }): Promise<unknown>;
   screenshot(opts: { clip: { x: number; y: number; width: number; height: number } }): Promise<Buffer | Uint8Array>;
   evaluate<T>(fn: (...args: unknown[]) => T): Promise<T>;

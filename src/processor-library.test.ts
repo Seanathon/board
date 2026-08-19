@@ -95,6 +95,23 @@ test("captureLibrary falls back to headless render when fetch+readability yields
   assert.ok(cap.text.includes("Anytype is a local-first knowledge base"), "should return rendered text");
 });
 
+// The direct fetch was unbounded, so a server that accepts the connection and then
+// never responds pinned the item in `processing` until the whole capture job expired
+// (CAPTURE_TIMEOUT_MS, now 600s) — and the job lane is serial, so every queued add sat
+// behind it. Longer budgets are only safe for BOUNDED waits; this one needs its own.
+test("captureLibrary bounds the direct fetch with an abort signal", async () => {
+  let sawSignal: AbortSignal | undefined;
+  const fetchImpl = (async (_url: string, init?: RequestInit) => {
+    sawSignal = init?.signal ?? undefined;
+    return { text: async () => ARTICLE_HTML };
+  }) as unknown as typeof fetch;
+
+  await captureLibrary("https://example.com/article", { fetchImpl, renderImpl: async () => "" });
+
+  assert.ok(sawSignal, "the direct fetch must carry an abort signal, or it can hang forever");
+  assert.equal(sawSignal.aborted, false, "and must not be aborted before the request starts");
+});
+
 test("captureLibrary uses fetch result and skips render when readability yields enough text", async () => {
   let renderCalled = false;
   const cap = await captureLibrary("https://example.com/article", {
