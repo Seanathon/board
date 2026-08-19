@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   resolveActiveCollection,
+  cardSummary,
   itemsUrl,
   itemUrl,
   addUrl,
@@ -522,4 +523,123 @@ test("safeErrorReason replaces anything unrecognized with a generic message", ()
 test("safeErrorReason reads either payload spelling", () => {
   // hydrate ships snake_case; applySseEvent writes camelCase.
   assert.equal(safeErrorReason({ errorReason: "timed out" }), "timed out");
+});
+
+// --- Descriptor-driven CARD summary -----------------------------------------------
+// The tile can't show 15 fields and the descriptor carries no display hint, so the
+// card picks three slots from the board's own content model: a category badge, a lead
+// line, and tag chips. Mirrors the detail modal's selection rules so a card and the
+// modal it opens can never disagree about what this item's "headline" is.
+
+// The composed board from the bug report (Reference Wall / Radiator), trimmed.
+const CARD_DESCRIPTOR = {
+  view: "grid",
+  fields: [
+    { key: "source_url", label: "Source", type: "url", enrichable: true },
+    { key: "site_name", label: "Site", type: "text", enrichable: true },
+    { key: "surface", label: "Surface", type: "tags", enrichable: true },
+    { key: "layout_move", label: "The move", type: "text", enrichable: true },
+    { key: "palette", label: "Palette", type: "tags", enrichable: true },
+    { key: "density", label: "Density", type: "enum", values: ["Dense", "Balanced"], enrichable: true },
+    { key: "verdict", label: "Verdict", type: "enum", values: ["Steal", "Pass"], enrichable: false },
+    { key: "what_works", label: "What works", type: "text", enrichable: false },
+    { key: "pull", label: "Pull", type: "number", enrichable: false },
+  ],
+};
+
+const CARD_ITEM = {
+  id: "i1",
+  title: "Vite | Next Generation Frontend Tooling",
+  status: "done",
+  fields: {
+    source_url: "https://vite.dev/",
+    site_name: "vite.dev",
+    surface: ["Open-source project homepage", "Docs landing page"],
+    layout_move:
+      "A single centered axis scrolled as alternating claim-then-proof bands: every capability section opens with one short centered line and resolves into a multi-up card grid.",
+    palette: ["violet-indigo brand primary", "gold/amber accent"],
+    density: "Balanced",
+  },
+};
+
+test("cardSummary picks a badge, a lead line and tags from the board's own fields", () => {
+  const s = cardSummary(CARD_ITEM, CARD_DESCRIPTOR);
+  assert.equal(s.badge?.value, "Balanced", "first AI-filled enum becomes the category badge");
+  assert.equal(s.lead?.key, "layout_move", "the long text field leads, not the short site_name");
+  assert.deepEqual(
+    s.tags,
+    ["Open-source project homepage", "Docs landing page", "violet-indigo brand primary", "gold/amber accent"],
+    "every tags field flattens into the chip row, in descriptor order",
+  );
+});
+
+test("cardSummary leaves the user's own fields to the modal's edit section", () => {
+  const item = {
+    ...CARD_ITEM,
+    fields: { ...CARD_ITEM.fields, verdict: "Steal", what_works: "The proof bands." },
+  };
+  const s = cardSummary(item, CARD_DESCRIPTOR);
+  assert.equal(s.badge?.value, "Balanced", "an enrichable enum still wins over the user's verdict");
+  assert.equal(s.lead?.key, "layout_move", "the user's what_works does not take the lead slot");
+});
+
+test("cardSummary falls back to short text when the board has no long-form field", () => {
+  const d = { fields: [{ key: "brand", label: "Brand", type: "text", enrichable: true }] };
+  const s = cardSummary({ fields: { brand: "Aesop" } }, d);
+  assert.equal(s.lead?.value, "Aesop", "a short text line beats no line at all");
+});
+
+test("cardSummary falls back to the user's fields on an all-manual board", () => {
+  const d = {
+    fields: [
+      { key: "note", label: "Note", type: "text", enrichable: false },
+      { key: "shelf", label: "Shelf", type: "tags", enrichable: false },
+    ],
+  };
+  const s = cardSummary({ fields: { note: "Bought in Kyoto.", shelf: ["ceramics"] } }, d);
+  assert.equal(s.lead?.value, "Bought in Kyoto.", "a board with no AI fields still fills its cards");
+  assert.deepEqual(s.tags, ["ceramics"]);
+});
+
+test("cardSummary never puts url/image/number fields in the text slots", () => {
+  const d = {
+    fields: [
+      { key: "source_url", label: "Source", type: "url", enrichable: true },
+      { key: "shot", label: "Shot", type: "image", enrichable: true },
+      { key: "pull", label: "Pull", type: "number", enrichable: true },
+    ],
+  };
+  const s = cardSummary({ fields: { source_url: "https://x.dev", shot: "/a.png", pull: 4 } }, d);
+  assert.equal(s.lead, null, "the URL is the card's own link and the image is its screenshot");
+  assert.equal(s.badge, null);
+  assert.deepEqual(s.tags, []);
+});
+
+test("cardSummary caps the chip row so one talkative item can't outgrow the grid", () => {
+  const d = { fields: [{ key: "t", label: "T", type: "tags", enrichable: true }] };
+  const many = Array.from({ length: 20 }, (_, i) => `tag-${i}`);
+  assert.equal(cardSummary({ fields: { t: many } }, d).tags.length, 6);
+  assert.equal(cardSummary({ fields: { t: many } }, d, { maxTags: 2 }).tags.length, 2);
+});
+
+test("cardSummary is safe on a missing descriptor or an empty item", () => {
+  assert.deepEqual(cardSummary({ fields: {} }, null), { badge: null, lead: null, tags: [] });
+  assert.deepEqual(cardSummary(null, CARD_DESCRIPTOR), { badge: null, lead: null, tags: [] });
+});
+
+test("cardSummary reads the nested prototype shape too (meta.tags / design.steal_this)", () => {
+  // The seeded boards hydrate nested, composed boards hydrate flat — getFieldValue
+  // bridges both, and the card must not care which board it is rendering.
+  const d = {
+    fields: [
+      { key: "meta.tier", label: "Tier", type: "enum", enrichable: true },
+      { key: "design.steal_this", label: "Steal this", type: "text", enrichable: true },
+      { key: "meta.tags", label: "Tags", type: "tags", enrichable: true },
+    ],
+  };
+  const item = { meta: { tier: "reference", tags: ["editorial"] }, design: { steal_this: "Lead with proof." } };
+  const s = cardSummary(item, d);
+  assert.equal(s.badge?.value, "reference");
+  assert.equal(s.lead?.value, "Lead with proof.");
+  assert.deepEqual(s.tags, ["editorial"]);
 });

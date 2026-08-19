@@ -6,7 +6,7 @@ import { loadConfig } from '../config.js';
 import { disabledLlm, EnrichmentDisabledError } from '../skills/types.js';
 import { HttpProvider } from './http-provider.js';
 import { CliProvider } from './cli-provider.js';
-import { selectProvider, describeProvider } from './select-provider.js';
+import { selectProvider, describeProvider, resolveCliAgent } from './select-provider.js';
 
 describe('selectProvider (Story 4.4)', () => {
   // AC 1/3/6 — no provider config → disabledLlm (the C10 no-AI default)
@@ -73,5 +73,45 @@ describe('describeProvider', () => {
   it('returns null for an unknown agent or a base-URL without a model (mirrors selectProvider)', () => {
     assert.equal(describeProvider(loadConfig({ LLM_AGENT: 'cursor' })), null);
     assert.equal(describeProvider(loadConfig({ LLM_BASE_URL: 'http://x/v1' })), null);
+  });
+});
+
+// The CLI agent's model. Left unset, `claude -p` inherits whatever the operator's
+// interactive default is (Opus on this box) — expensive and slow for a structured
+// extraction. Board pins Sonnet for the headless read; an explicit LLM_MODEL wins.
+describe('resolveCliAgent (headless model default)', () => {
+  it('defaults the claude CLI agent to sonnet when no model is configured', () => {
+    assert.deepEqual(resolveCliAgent(loadConfig({ LLM_AGENT: 'claude' }).provider), {
+      id: 'claude',
+      model: 'sonnet',
+    });
+  });
+
+  it('honors an explicit LLM_MODEL over the default', () => {
+    assert.deepEqual(resolveCliAgent(loadConfig({ LLM_AGENT: 'claude', LLM_MODEL: 'opus' }).provider), {
+      id: 'claude',
+      model: 'opus',
+    });
+  });
+
+  it('honors the legacy BOARD_CLAUDE_MODEL alias over the default', () => {
+    assert.deepEqual(
+      resolveCliAgent(loadConfig({ LLM_AGENT: 'claude', BOARD_CLAUDE_MODEL: 'haiku' }).provider),
+      { id: 'claude', model: 'haiku' },
+    );
+  });
+
+  // codex has its own model catalog — Board does not pick one for it.
+  it('leaves codex unpinned (no claude default leaks across agents)', () => {
+    assert.deepEqual(resolveCliAgent(loadConfig({ LLM_AGENT: 'codex' }).provider), {
+      id: 'codex',
+      model: null,
+    });
+  });
+
+  // The default must NOT enable HTTP: selectProvider gates HTTP on baseUrl && model,
+  // so a base-URL-only install has to stay disabled rather than resolve to a guess.
+  it('does not enable an HTTP provider that has a base-URL but no model', () => {
+    assert.equal(selectProvider(loadConfig({ LLM_BASE_URL: 'http://x/v1' })), disabledLlm);
   });
 });

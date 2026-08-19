@@ -1143,6 +1143,35 @@
     .tier-badge.polish { background: rgba(5,150,105,0.2); color: var(--polish); }
     .tier-badge.reference { background: rgba(14,165,233,0.2); color: var(--reference); }
 
+    /* Composed-board tile: the same geometry as the Inspiration card, but the badge is
+       a neutral chip (a composed board's enum has no tier palette to key off) and the
+       lead line is upright — the italic in .card-steal is Inspiration's "steal this"
+       voice, not something every board's lead field should borrow. */
+    .card-badge {
+      flex-shrink: 0;
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: var(--text-2);
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    .card-lead {
+      font-size: 12px;
+      color: var(--text-2);
+      margin-bottom: 10px;
+      line-height: 1.45;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
     .card-steal {
       font-size: 12px;
       color: var(--text-2);
@@ -1602,6 +1631,123 @@
     }
     .btn-primary:hover { background: #fbbf24; }
     .btn-primary:disabled { opacity: 0.5; cursor: default; }
+
+    /* ── New-board composer ──────────────────────────────────────────────────────
+       Composition is a 30-120s LLM round trip — the longest wait in the app. The old
+       feedback was one `.save-status` span, which is opacity:0 until something adds
+       .visible, so the wait read as a dead modal. This is the honest version: a live
+       elapsed clock, a phase line that says what is actually happening, and a ghost of
+       the board being drafted so the shape of the answer is legible before it lands.
+       No fake percentage — nothing here knows how far along the model is. */
+    .compose-working {
+      margin-top: 16px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+    .compose-working-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text);
+    }
+    .compose-working-head .card-state-dot { flex-shrink: 0; }
+    .compose-elapsed {
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+      font-size: 11px;
+      color: var(--text-3);
+    }
+    .compose-working-note { font-size: 11px; color: var(--text-3); margin-top: 6px; }
+    .compose-ghost {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      margin-top: 14px;
+    }
+    /* .ghost-bar's default fill IS --surface-2, which is this panel's own background —
+       the bars would breathe invisibly. Step them up one level so they read. */
+    .compose-ghost .ghost-bar { background: var(--border-hover); }
+
+    /* The proposal: a board's identity (name, how it captures, what it reads for) above
+       the fields it would keep, split by WHO fills each one — the one distinction that
+       decides whether this board will work for you.
+
+       Deliberately NOT a card grid. A field definition is a name and a type: two short
+       tokens. Boxing each one gave 13 borders of chrome around ~2 words apiece, made
+       every row as tall as the tallest enum in it, and stranded the odd field alone on
+       its own row. A two-column definition list carries the same information with no
+       chrome, no ragged rows, and room for the field NAME (the part you actually read)
+       to be full-length. The lens above it reuses .steal-this — the app's existing
+       "here is the opinionated bit" component — so the stance outranks the inventory. */
+    .proposal { margin-top: 18px; }
+    .proposal .field-group-label { margin: 20px 0 10px; }
+    .proposal .steal-this { margin: 14px 0 4px; }
+    .proposal-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 10px 0 4px;
+    }
+    .proposal-chip {
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 20px;
+      background: var(--surface-2);
+      color: var(--text-2);
+      border: 1px solid var(--border);
+    }
+    .proposal-chip strong { color: var(--text); font-weight: 600; }
+    .proposal-count { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-2); }
+
+    /* Multi-column, not a 2-track grid: a grid row is as tall as its tallest cell, so
+       one enum's value line pushed a gap under the plain field beside it. Columns flow
+       each field at its own height, so the vertical rhythm stays even down both. */
+    .proposal-fields {
+      columns: 2;
+      column-gap: 28px;
+    }
+    @media (max-width: 560px) {
+      .proposal-fields { columns: 1; }
+    }
+    .proposal-field {
+      break-inside: avoid;
+      -webkit-column-break-inside: avoid;
+      margin-bottom: 9px;
+    }
+    .proposal-field-name { font-size: 13px; color: var(--text); line-height: 1.35; }
+    /* The type trails the name instead of leading it: leading, it pushed every name
+       into a narrow remainder and truncated the longest ones. Monospace because that is
+       already how this app renders schema (see .bf-key-input in the board editor). */
+    .proposal-type {
+      margin-left: 7px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--surface-2);
+      color: var(--text-2);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 9.5px;
+      white-space: nowrap;
+    }
+    .proposal-values {
+      margin-top: 2px;
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--text-2);
+    }
+
+    .proposal-draft-note {
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-2);
+      background: var(--accent-dim);
+      border: 1px solid rgba(245,158,11,0.2);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      margin-top: 14px;
+    }
 
     .save-status {
       font-size: 12px;
@@ -2078,12 +2224,43 @@ LLM_API_KEY=sk-…</pre>
     document.getElementById('modal-overlay').classList.add('open');
   }
 
-  function fieldsPreviewHtml(descriptor) {
-    const fields = (descriptor && descriptor.fields) || [];
-    return fields.map(f =>
-      `<div class="board-field-row"><span class="field-badge badge">${esc(f.type)}</span> <strong>${esc(f.label)}</strong> <span style="color:var(--text-3)">${esc(f.key)}</span>${f.enrichable === false ? ' <span style="color:var(--text-3)">(yours)</span>' : ''}</div>`
-    ).join('') || '<div style="color:var(--text-3)">No fields</div>';
+  const FIELD_TYPE_ORDER = ['url', 'image', 'text', 'tags', 'enum', 'number', 'date'];
+
+  /** One field: its name, its type, and (for an enum) the vocabulary it would accept. */
+  function proposalFieldHtml(f) {
+    const values = f.type === 'enum' && (f.values || []).length
+      ? `<dd class="proposal-values">${esc(f.values.join(' · '))}</dd>`
+      : '';
+    return `<div class="proposal-field">`
+      + `<dt class="proposal-field-name" title="${esc(f.key)}">${esc(f.label || f.key)}`
+      + `<span class="proposal-type">${esc(f.type)}</span></dt>${values}</div>`;
   }
+
+  /**
+   * The fields, split by WHO fills them. That is the one distinction that decides
+   * whether a proposed board will actually work for you. Ordered by type so like sits
+   * with like. A <dl>: a field name described by its type is exactly that, and it
+   * keeps reading order identical to visual order.
+   */
+  function proposalFieldsHtml(descriptor) {
+    const fields = (descriptor && descriptor.fields) || [];
+    if (!fields.length) return '<div style="color:var(--text-3);font-size:13px">No fields yet. Add them after you create the board.</div>';
+    const bySlot = (a, b) => FIELD_TYPE_ORDER.indexOf(a.type) - FIELD_TYPE_ORDER.indexOf(b.type);
+    const ai = fields.filter(f => f.enrichable !== false).sort(bySlot);
+    const mine = fields.filter(f => f.enrichable === false).sort(bySlot);
+    const group = (head, note, list) => list.length
+      ? `<div class="field-group-label">${head} <span class="proposal-count">${list.length} · ${note}</span></div>`
+        + `<dl class="proposal-fields">${list.map(proposalFieldHtml).join('')}</dl>`
+      : '';
+    return group('Board fills these', 'from each capture', ai)
+      + group('You fill these', 'your own read', mine);
+  }
+
+  const INGEST_LABEL = {
+    'url-screenshot': 'screenshots the page',
+    'url-readable': 'reads the article text',
+    'manual-upload': 'takes files you upload',
+  };
 
   function openComposeModal() {
     showModalContent(`
@@ -2100,44 +2277,132 @@ LLM_API_KEY=sk-…</pre>
       </div>`);
     document.getElementById('modal-cancel').onclick = closeModal;
     document.getElementById('compose-go').onclick = runCompose;
+    composedProposal = null; // a fresh modal must not offer to create the LAST proposal
+  }
+
+  /**
+   * Set the composer's status line. `.save-status` is opacity:0 until `.visible` is
+   * added — without it every message here is invisible, which is exactly how a 90s
+   * compose came to look like a dead modal.
+   */
+  function setComposeStatus(text, tone) {
+    const el = document.getElementById('compose-status');
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.toggle('visible', !!text);
+    el.style.color = tone === 'error' ? 'var(--danger, #ef4444)' : '';
+  }
+
+  // Honest phase copy: what the composer is actually doing, in order. Nothing here
+  // knows how far along the model is, so there is no progress bar and no percentage —
+  // the elapsed clock is the only real number on screen.
+  const COMPOSE_PHASES = [
+    'Reading your description',
+    'Choosing the fields worth keeping',
+    'Picking how this board captures and reads',
+    'Checking the proposal holds together',
+  ];
+  const COMPOSE_PHASE_MS = 12_000;
+  let composeTicker = null;
+
+  /** The waiting state: a live clock, the current phase, and a ghost of the board. */
+  function startComposeWorking() {
+    const host = document.getElementById('compose-preview');
+    host.innerHTML = `
+      <div class="compose-working">
+        <div class="compose-working-head">
+          <span class="card-state-dot"></span>
+          <span id="compose-phase">${esc(COMPOSE_PHASES[0])}</span>
+          <span class="compose-elapsed" id="compose-elapsed">0s</span>
+        </div>
+        <div class="compose-working-note">Usually under a minute. Nothing is saved until you accept.</div>
+        <div class="compose-ghost">
+          ${ghostBar('42%', 0)}${ghostBar('88%', 90)}${ghostBar('66%', 180)}${ghostBar('78%', 270)}${ghostBar('50%', 360)}
+        </div>
+      </div>`;
+    const started = Date.now();
+    stopComposeWorking(false);
+    composeTicker = setInterval(() => {
+      const secs = Math.floor((Date.now() - started) / 1000);
+      const elapsed = document.getElementById('compose-elapsed');
+      const phase = document.getElementById('compose-phase');
+      if (!elapsed || !phase) return stopComposeWorking(false);
+      elapsed.textContent = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, '0')}s`;
+      // Hold on the last phase rather than looping — a spinner that starts over reads
+      // as "stuck", and by then the only honest statement is "still working".
+      const i = Math.min(Math.floor((Date.now() - started) / COMPOSE_PHASE_MS), COMPOSE_PHASES.length - 1);
+      phase.textContent = COMPOSE_PHASES[i];
+    }, 1000);
+  }
+
+  function stopComposeWorking(clear = true) {
+    if (composeTicker) { clearInterval(composeTicker); composeTicker = null; }
+    if (clear) {
+      const host = document.getElementById('compose-preview');
+      if (host) host.innerHTML = '';
+    }
   }
 
   let composedProposal = null;
   async function runCompose() {
     const desc = document.getElementById('compose-desc').value.trim();
-    const status = document.getElementById('compose-status');
     const goBtn = document.getElementById('compose-go');
-    if (!desc) { status.textContent = 'Describe the board first'; return; }
-    goBtn.disabled = true; status.textContent = 'Composing…';
+    if (!desc) { setComposeStatus('Describe the board first', 'error'); return; }
+    goBtn.disabled = true;
+    goBtn.textContent = 'Composing…';
+    setComposeStatus('');
+    startComposeWorking();
     try {
       const res = await fetch('/skills/compose-board', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: desc }),
       });
       const data = await res.json();
-      if (!res.ok) { status.textContent = data.error || 'Compose failed'; return; }
+      stopComposeWorking();
+      if (!res.ok) { setComposeStatus(data.error || 'Compose failed', 'error'); return; }
       composedProposal = data; // { status, name, descriptor }
-      status.textContent = data.status === 'draft' ? 'Draft (review/edit below)' : 'Proposed';
-      document.getElementById('compose-preview').innerHTML = `
-        <div class="steal-this" style="margin-top:16px">
-          <div class="field-label">Board name</div>
-          <input id="compose-name" class="reflection-input" value="${esc(data.name || '')}">
-          <div class="field-label" style="margin-top:12px">Fields (${(data.descriptor && data.descriptor.fields || []).length}) · ${esc(data.descriptor && data.descriptor.view || '')} view</div>
-          ${fieldsPreviewHtml(data.descriptor)}
+      renderProposal(data);
+    } catch {
+      stopComposeWorking();
+      setComposeStatus('Network error', 'error');
+    } finally {
+      goBtn.disabled = false;
+      goBtn.textContent = composedProposal ? 'Compose again' : 'Compose';
+      goBtn.className = composedProposal ? 'btn btn-ghost' : 'btn btn-primary';
+    }
+  }
+
+  /** The proposal, as a board you can read at a glance rather than a list of rows. */
+  function renderProposal(data) {
+    const d = data.descriptor || {};
+    const fields = d.fields || [];
+    const draftNote = data.status === 'draft'
+      ? `<div class="proposal-draft-note">This one needs your hand. ${esc((data.errors || [])[0]?.message || 'The proposal did not validate.')} Create it anyway and shape the fields in the board editor.</div>`
+      : '';
+    document.getElementById('compose-preview').innerHTML = `
+      <div class="proposal">
+        <div class="field-label">Board name</div>
+        <input id="compose-name" class="reflection-input" value="${esc(data.name || '')}">
+        <div class="proposal-chips">
+          <span class="proposal-chip"><strong>${esc(d.view || 'grid')}</strong> view</span>
+          <span class="proposal-chip">${esc(INGEST_LABEL[d.ingest_mode] || d.ingest_mode || 'captures pages')}</span>
         </div>
-        <div class="modal-footer"><button class="btn btn-primary" id="compose-create">Create board</button></div>`;
-      document.getElementById('compose-create').onclick = createComposedBoard;
-    } catch { status.textContent = 'Network error'; }
-    finally { goBtn.disabled = false; }
+        ${d.enrichment_prompt ? `<div class="steal-this"><div class="field-label">The lens</div><div class="field-value">${esc(d.enrichment_prompt)}</div></div>` : ''}
+        ${proposalFieldsHtml(d)}
+        ${draftNote}
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" id="compose-create">Create board</button></div>`;
+    document.getElementById('compose-create').onclick = createComposedBoard;
   }
 
   async function createComposedBoard() {
     if (!composedProposal) return;
     const name = (document.getElementById('compose-name').value || composedProposal.name || '').trim();
-    const status = document.getElementById('compose-status');
     const btn = document.getElementById('compose-create');
-    if (!name) { status.textContent = 'Name is required'; return; }
-    btn.disabled = true; status.textContent = 'Creating…';
+    if (!name) { setComposeStatus('Name is required', 'error'); return; }
+    btn.disabled = true;
+    btn.textContent = 'Creating…';
+    setComposeStatus('Creating the board…');
     try {
       const id = slugifyBoardId(name);
       const res = await fetch('/skills/create-board', {
@@ -2145,11 +2410,21 @@ LLM_API_KEY=sk-…</pre>
         body: JSON.stringify({ id, name, descriptor: composedProposal.descriptor }),
       });
       const data = await res.json();
-      if (!res.ok) { status.textContent = data.error || 'Create failed'; btn.disabled = false; return; }
+      if (!res.ok) {
+        setComposeStatus(data.error || 'Create failed', 'error');
+        btn.disabled = false; btn.textContent = 'Create board';
+        return;
+      }
       closeModal();
+      // Point the app at the new board BEFORE load(), so load() resolves it as active
+      // and doesn't subscribe to the outgoing board's status stream on the way past.
+      localStorage.setItem('board.activeCollection', id);
       await load();
       await setActiveCollection(id);
-    } catch { status.textContent = 'Network error'; btn.disabled = false; }
+    } catch {
+      setComposeStatus('Network error', 'error');
+      btn.disabled = false; btn.textContent = 'Create board';
+    }
   }
 
   const BOARD_FIELD_TYPES = ['text', 'number', 'date', 'url', 'enum', 'tags', 'image'];
@@ -2343,6 +2618,11 @@ LLM_API_KEY=sk-…</pre>
   async function setActiveCollection(cid) {
     activeCollection = cid;
     localStorage.setItem('board.activeCollection', cid);
+    // The status stream is BOARD-SCOPED on the server (/events?boardId=…), so a switch
+    // must re-subscribe or the new board receives nothing and its cards stay stuck in
+    // their skeleton until a manual refresh. Before the items fetch, so a transition
+    // that fires while they load isn't missed; subscribeToStatus is idempotent per board.
+    subscribeToStatus();
     const helpers = window.collectionHelpers;
     const activeCol = collections.find(c => c.id === cid);
 
@@ -2539,7 +2819,7 @@ LLM_API_KEY=sk-…</pre>
     const inFlight = (b) => window.collectionHelpers.isInFlight(b);
 
     const activeColObj = collections.find(c => c.id === activeCollection);
-    const isCustomBoard = !!activeColObj && !['inspiration', 'library', 'inbox'].includes(activeColObj.id);
+    const isCustomBoard = isComposedBoard(activeColObj);
 
     if (isCustomBoard) {
       // Composed board: filter via the descriptor-driven predicate (Story 8.2's
@@ -2608,6 +2888,16 @@ LLM_API_KEY=sk-…</pre>
 
   function render() {
     const activeCol = collections.find(c => c.id === activeCollection);
+    // A COMPOSED board renders from its own descriptor. It can't use either seeded
+    // renderer: /api/collections derives type "inspiration" for any grid board, which
+    // sent composed boards into renderGrid() — hardcoded to meta.tags/design.steal_this
+    // — so their tiles came out as a title and nothing else. The seeded boards keep
+    // their bespoke renderers untouched (NFR-BC).
+    if (activeCol && isComposedBoard(activeCol)) {
+      if (activeView === 'grid') renderDescriptorGrid(activeCol);
+      else renderDescriptorList(activeCol);
+      return;
+    }
     if (activeCol && activeCol.type !== 'inspiration') {
       // Non-visual boards (e.g. Library) honor the grid/list toggle too — the grid is
       // just screenshot-less (the board's descriptor stores no images).
@@ -2617,6 +2907,15 @@ LLM_API_KEY=sk-…</pre>
     }
     if (activeView === 'grid') renderGrid();
     else renderList();
+  }
+
+  // The seeded boards (bespoke renderers + fixed chrome) vs everything the composer
+  // made. Used by BOTH applyFilters (descriptor-driven predicate) and render
+  // (descriptor-driven card) so filtering and drawing can never disagree about which
+  // kind of board this is.
+  const SEEDED_BOARD_IDS = ['inspiration', 'library', 'inbox'];
+  function isComposedBoard(col) {
+    return !!col && !SEEDED_BOARD_IDS.includes(col.id);
   }
 
   const HEART_SVG = `<svg viewBox="0 0 16 16"><path class="heart-outline" d="M8 13.5S2 9.5 2 5.5A3 3 0 0 1 8 4a3 3 0 0 1 6 1.5C14 9.5 8 13.5 8 13.5Z"/></svg>`;
@@ -2861,6 +3160,126 @@ LLM_API_KEY=sk-…</pre>
       });
     });
     gridEl.querySelectorAll('.more-btn-list').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); openCtxMenu(btn.dataset.id, btn); });
+    });
+  }
+
+  // --- Composed-board rendering (descriptor-driven) ---------------------------------
+  // ONE pair of renderers for EVERY board the composer makes, with no per-board code:
+  // collectionHelpers.cardSummary picks the three card slots (category badge, lead
+  // line, chips) out of whatever fields that board declared. The tile chrome, the
+  // skeleton and the failure state are the SAME helpers the seeded boards use, so a
+  // composed board never looks like a second-class citizen of the app.
+
+  /** Does this board carry images? url-readable boards are text-first (og:image only). */
+  function boardShowsImages(col) {
+    return (col?.descriptor?.ingest_mode ?? 'url-screenshot') !== 'url-readable';
+  }
+
+  function summaryOf(b, col) {
+    const ch = window.collectionHelpers;
+    return ch?.cardSummary ? ch.cardSummary(b, col?.descriptor) : { badge: null, lead: null, tags: [] };
+  }
+
+  /**
+   * The filled (state === 'ready') body of a composed card: lead line + chip row.
+   * Both class names are passed in because the two shells lay their body out
+   * differently — .lib-card is a NAMED-AREA grid, so its chips must carry
+   * `lib-topics` or they auto-place into an implicit cell and land in the wrong slot.
+   */
+  function descriptorCardBody(b, col, leadClass, tagsClass) {
+    const s = summaryOf(b, col);
+    const lead = s.lead ? `<div class="${leadClass}">${esc(s.lead.value)}</div>` : '';
+    const tags = s.tags.length
+      ? `<div class="${tagsClass}">${s.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>`
+      : '';
+    return lead + tags;
+  }
+
+  function renderDescriptorGrid(col) {
+    const gridEl = document.getElementById('grid-view');
+    const listEl = document.getElementById('list-view');
+    listEl.style.display = 'none';
+    gridEl.style.display = '';
+    if (!filtered.length) { gridEl.innerHTML = emptyState(bookmarks.length > 0); return; }
+    const withImages = boardShowsImages(col);
+    gridEl.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      const badge = state === 'ready'
+        ? (summaryOf(b, col).badge ? `<span class="card-badge">${esc(summaryOf(b, col).badge.value)}</span>` : '')
+        : inFlight ? `<span class="ghost-bar ghost-badge"></span>` : '';
+      // Same progressive reveal as Inspiration: the screenshot and title are whatever
+      // capture already produced, and only the AI fields stay ghosted.
+      const image = b.screenshot
+        ? `<img class="card-screenshot" src="${shotSrc(b)}" alt="${esc(b.title || '')}" loading="lazy" />`
+        : inFlight && withImages
+          ? `<div class="ghost-image"></div>`
+          : withImages ? `<div class="card-no-screenshot">No image</div>` : '';
+      const title = b.title
+        ? `<div class="card-title">${esc(b.title)}</div>`
+        : `<div class="card-title" style="flex:1">${ghostBar('72%')}</div>`;
+      const body = state === 'ready'
+        ? descriptorCardBody(b, col, 'card-lead', 'card-tags')
+        : `${stateNote(b, state)}${inFlight ? ghostBody() : ''}`;
+      return `
+      <div class="grid-card${inFlight ? ' is-inflight' : ''}" data-id="${esc(b.id)}" style="position:relative">
+        ${image}
+        <button class="fav-btn${b.favorite ? ' active' : ''}" data-id="${esc(b.id)}" title="${b.favorite ? 'Unfavorite' : 'Favorite'}">${HEART_SVG}</button>
+        <button class="more-btn" data-id="${esc(b.id)}" title="More">···</button>
+        <div class="card-body">
+          <div class="card-header">${title}${badge}</div>
+          ${body}
+        </div>
+      </div>`;
+    }).join('');
+    wireDescriptorCards(gridEl, '.grid-card');
+  }
+
+  function renderDescriptorList(col) {
+    const gridEl = document.getElementById('grid-view');
+    const listEl = document.getElementById('list-view');
+    gridEl.style.display = 'none';
+    listEl.style.display = 'block';
+    if (!filtered.length) { listEl.innerHTML = emptyState(bookmarks.length > 0); return; }
+    listEl.innerHTML = filtered.map(b => {
+      const state = stateOf(b);
+      const inFlight = state === 'capturing' || state === 'reading';
+      const badge = state === 'ready' && summaryOf(b, col).badge
+        ? `<span class="card-badge">${esc(summaryOf(b, col).badge.value)}</span>` : '';
+      const body = state === 'ready'
+        ? descriptorCardBody(b, col, 'lib-summary', 'lib-topics')
+        : `${stateNote(b, state)}${inFlight ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${ghostBar('100%')}${ghostBar('88%', 90)}${ghostBar('42%', 180)}</div>` : ''}`;
+      return `
+      <article class="lib-card${inFlight ? ' is-inflight' : ''}" data-id="${esc(b.id)}">
+        <button class="more-btn-list" data-id="${esc(b.id)}" title="More">···</button>
+        <div class="lib-headline">
+          <a class="lib-title" href="${esc(b.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(b.title || b.url)}</a>
+          <div class="lib-meta">
+            <span class="lib-host">${esc(hostname(b.url))}</span>
+            ${badge}
+          </div>
+        </div>
+        ${body}
+      </article>`;
+    }).join('');
+    wireDescriptorCards(listEl, '.lib-card');
+  }
+
+  /** Shared wiring for both composed renderers: open the generic modal, fav, ⋯ menu. */
+  function wireDescriptorCards(root, cardSel) {
+    bindRetryButtons(root);
+    root.querySelectorAll(cardSel).forEach(card => {
+      card.addEventListener('click', (e) => {
+        if (!e.target.closest('.fav-btn') && !e.target.closest('.more-btn') && !e.target.closest('.more-btn-list')) {
+          openModal(card.dataset.id);
+        }
+      });
+    });
+    root.querySelectorAll('.fav-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); openFavPopover(btn.dataset.id, btn); });
+    });
+    root.querySelectorAll('.more-btn, .more-btn-list').forEach(btn => {
       btn.addEventListener('click', (e) => { e.stopPropagation(); openCtxMenu(btn.dataset.id, btn); });
     });
   }
@@ -3368,6 +3787,7 @@ LLM_API_KEY=sk-…</pre>
   }
 
   function closeModal() {
+    stopComposeWorking(false); // the composer's elapsed clock must not tick on forever
     document.getElementById('modal-overlay').classList.remove('open');
     document.getElementById('modal').classList.remove('modal--welcome');
     currentBookmark = null;
@@ -4125,8 +4545,8 @@ LLM_API_KEY=sk-…</pre>
   // load() is called by the module script below after collectionHelpers are initialized
 </script>
 <script type="module">
-  import { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
-  window.collectionHelpers = { resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
+  import { cardSummary, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
+  window.collectionHelpers = { cardSummary, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
   // Story 7.2: generic descriptor-driven field renderer (Epic 8 wires it into the
   // descriptor-driven card/modal when the UI consumes the SQLite item model).
   import { renderField, renderFields, renderAsset, isSafeUrl } from './descriptor/render-map.js';
