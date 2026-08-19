@@ -27,6 +27,11 @@
   </script>
   <style>
     :root {
+      /* Native widgets — the open <select> list, scrollbars, focus rings — render from
+         this, not from our tokens. Without it they follow the OS and a dark app gets a
+         white dropdown list. */
+      color-scheme: dark;
+      --select-caret: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='none' stroke='%23888888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M1 1.25 5 4.75 9 1.25'/></svg>");
       --bg: #0c0c0c;
       --surface: #141414;
       --surface-2: #1a1a1a;
@@ -46,6 +51,8 @@
     }
 
     [data-theme="light"] {
+      color-scheme: light;
+      --select-caret: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='none' stroke='%23555555' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M1 1.25 5 4.75 9 1.25'/></svg>");
       --bg: #fafafa;
       --surface: #ffffff;
       --surface-2: #f4f4f4;
@@ -132,10 +139,18 @@
     }
 
     select.filter-select {
-      background: var(--surface);
+      appearance: none;
+      -webkit-appearance: none;
+      background-color: var(--surface);
+      background-image: var(--select-caret);
+      background-repeat: no-repeat;
+      background-position: right 11px center;
+      background-size: 10px 6px;
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
-      padding: 7px 10px;
+      /* Right padding clears the caret with real breathing room; the native inset put
+         the arrow almost against the border. */
+      padding: 7px 30px 7px 10px;
       color: var(--text-2);
       font-size: 12px;
       outline: none;
@@ -144,7 +159,7 @@
     }
     select.filter-select:focus { border-color: var(--accent); color: var(--text); }
     select.filter-select.active {
-      background: var(--accent-dim);
+      background-color: var(--accent-dim);
       border-color: var(--accent);
       color: var(--accent);
     }
@@ -1962,12 +1977,16 @@
         content: "";
         position: absolute;
         left: -11px;
-        top: -8px;
+        /* The row gap is 2px; anything more reached up into the active pill's rounded
+           corner and crossed it. Start exactly at the gap so the elbow leaves the pill
+           rather than overlapping it. */
+        top: -2px;
         bottom: 50%;
         width: 8px;
-        border-left: 1px solid var(--border-hover);
-        border-bottom: 1px solid var(--border-hover);
+        border-left: 1px solid var(--accent);
+        border-bottom: 1px solid var(--accent);
         border-bottom-left-radius: 5px;
+        opacity: 0.55;
         pointer-events: none;
       }
       /* Creating a board is an action, not another row in the list — a secondary
@@ -2004,9 +2023,25 @@
 
       #drawer-view .header-right { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
       #drawer-view .count { display: none; } /* the footer's "Show N" is this number */
-      #drawer-view .filter-select { flex: 1; min-height: 44px; font-size: 14px; }
-      #drawer-view .view-btn { min-width: 52px; min-height: 44px; }
-      #drawer-view .theme-toggle { min-width: 44px; min-height: 44px; }
+      /* The sort select takes its own line: at ~292px of drawer width it cannot share a
+         row with both icon controls without crushing "Recently added". */
+      #drawer-view .filter-select { flex: 1 0 100%; height: 44px; font-size: 14px; }
+      /* .view-btn/.theme-toggle centre on the cross axis only, so once given a min-width
+         their icons sat left-aligned in the box. */
+      #drawer-view .view-toggle { height: 44px; }
+      #drawer-view .view-btn {
+        min-width: 56px;
+        height: 100%;
+        padding: 0;
+        justify-content: center;
+      }
+      #drawer-view .theme-toggle {
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        justify-content: center;
+      }
+      #drawer-view .view-btn svg, #drawer-view .theme-toggle svg { width: 17px; height: 17px; }
 
       #drawer-tags .tag-cloud { margin: 0; max-height: none; }
       #drawer-tags .tag-chip { min-height: 40px; font-size: 13px; padding: 0 14px; }
@@ -2783,8 +2818,14 @@ LLM_API_KEY=sk-…</pre>
     drawer.hidden = false;
     scrim.hidden = false;
     updateDrawerChrome();
-    // Next frame, so the transform transition has a start value to animate FROM.
-    requestAnimationFrame(() => { drawer.classList.add('open'); scrim.classList.add('open'); });
+    // Force a reflow so the closed transform is committed as the transition's start
+    // value, then open in the SAME task. Deferring this to requestAnimationFrame looks
+    // equivalent but isn't: rAF is throttled in a backgrounded or occluded tab, so the
+    // class could never land and leave a focus-trapped dialog sitting off-screen with
+    // `hidden` already false.
+    void drawer.offsetWidth;
+    drawer.classList.add('open');
+    scrim.classList.add('open');
     document.body.style.overflow = 'hidden';
     document.body.classList.add('drawer-open');
     document.getElementById('drawer-btn')?.setAttribute('aria-expanded', 'true');
@@ -2880,7 +2921,7 @@ LLM_API_KEY=sk-…</pre>
       `<button class="coll-btn${activeCollection === c.id ? ' active' : ''}" data-cid="${esc(c.id)}">${esc(c.name)}</button>`
     );
     const editBtnHtml = activeIndex >= 0
-      ? `<button class="coll-btn coll-edit" id="edit-board-btn" title="Edit this board">⚙<span class="coll-btn-text">Edit this board</span></button>`
+      ? `<button class="coll-btn coll-edit" id="edit-board-btn" title="Edit this board">⚙︎<span class="coll-btn-text">Edit this board</span></button>`
       : '';
     const newBtnHtml = `<button class="coll-btn coll-new" id="new-board-btn" title="New board">+<span class="coll-btn-text">New board</span></button>`;
     if (chromeIsMobile) {
