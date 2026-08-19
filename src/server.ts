@@ -19,6 +19,7 @@ import { enqueueWrite, enqueueTransaction, reconcileInterruptedItems } from "./d
 import { eq } from "drizzle-orm";
 import { validateDescriptorProposal } from "./descriptor/guardrails.js";
 import { patchItemFields, deleteItemWithAssets } from "./db/item-actions.js";
+import { uploadAssetForItem } from "./capture/manual-upload.js";
 import { listBoardItemsForUi, getItemForUi } from "./db/hydrate.js";
 import { renameBoard, deleteBoardCascade } from "./db/board-actions.js";
 import { boards as boardsTable } from "./db/schema.js";
@@ -256,51 +257,32 @@ async function handleRefetchItem(
   return spawnAddItem({ cid, url: item.url as string, updateId: itemId, instructions: body.instructions, analysisAgent }, reply);
 }
 
-// Shared handler: upload screenshot (visual collections only)
-function handleScreenshot(
-  cid: string,
+// Shared handler: manual image upload (the graceful escape hatch when auto-capture
+// fails — e.g. an og:image fetch came back empty). SQLite-backed via the upload-asset
+// path (capture/manual-upload), so it works for EVERY board, including composed ones
+// (the legacy JSON handler only knew the three seeded boards and 400'd on a composed
+// board id). Board-mode-agnostic by design: a readable/list item can also receive an
+// uploaded image, so there is no "visual collections only" guard here.
+async function handleScreenshot(
+  handle: DbHandle,
   itemId: string,
   body: { dataUrl?: string },
   reply: FastifyReply,
   screenshotsDir: string
-): Record<string, unknown> | { error: string } | null {
-  const col = resolveCollection(cid, reply);
-  if (!col) return { error: `Unknown collection: "${cid}"` };
+): Promise<Record<string, unknown> | { error: string } | null> {
+  const dataUrl = body?.dataUrl;
+  if (!dataUrl) { reply.status(400); return { error: "dataUrl is required" }; }
+  if (!getItemForUi(handle, itemId)) { reply.status(404); return { error: "Not found" }; }
 
-  if (col.view !== "grid") {
+  try {
+    await uploadAssetForItem(handle, { itemId, dataUrl, screenshotsDir });
+  } catch (err) {
+    // Bad/oversized data URL → client error. (Unknown item is already 404'd above.)
     reply.status(400);
-    return { error: "screenshots not supported for this collection" };
+    return { error: (err as Error).message };
   }
 
-  const { dataUrl } = body;
-  if (!dataUrl) { reply.status(400); return { error: "dataUrl is required" }; }
-
-  const m = /^data:image\/[^;]+;base64,(.+)$/.exec(dataUrl);
-  if (!m) { reply.status(400); return { error: "Invalid dataUrl" }; }
-  const buf = Buffer.from(m[1], "base64");
-
-  const updated = mutateCollection<Record<string, unknown>, Record<string, unknown> | undefined>(
-    col.id,
-    (items) => {
-      const idx = items.findIndex((b) => b.id === itemId);
-      if (idx === -1) return undefined;
-
-      const relPath = (items[idx].screenshot as string | null) ?? `screenshots/${itemId}.png`;
-      // Story 2.2: write under DATA_DIR/screenshots (by basename), not the app tree.
-      const absPath = path.join(screenshotsDir, path.basename(relPath));
-      fs.mkdirSync(path.dirname(absPath), { recursive: true });
-      fs.writeFileSync(absPath, buf);
-
-      if (!items[idx].screenshot) {
-        items[idx] = { ...items[idx], screenshot: relPath };
-      }
-
-      return items[idx];
-    }
-  );
-
-  if (!updated) { reply.status(404); return { error: "Not found" }; }
-  return updated;
+  return getItemForUi(handle, itemId) ?? null;
 }
 
 // --- Server factory ---
@@ -737,11 +719,10 @@ t.addEventListener('input',upd);upd();
     }
   );
 
-  // Manual screenshot upload stays on the legacy handler for now (the upload-asset
-  // skill is the SQLite path; wiring the UI's replace-screenshot to it is a follow-up).
+  // Manual image upload → SQLite asset (works for composed boards too).
   app.post<{ Params: { cid: string; id: string }; Body: { dataUrl?: string } }>(
     "/api/collections/:cid/items/:id/screenshot",
-    async (req, reply) => handleScreenshot(req.params.cid, req.params.id, req.body, reply, screenshotsDir)
+    async (req, reply) => handleScreenshot(opts.db ?? getDb(), req.params.id, req.body, reply, screenshotsDir)
   );
 
   // --- Legacy aliases (delegate to collection handlers with cid="inspiration") ---
@@ -770,7 +751,7 @@ t.addEventListener('input',upd);upd();
 
   app.post<{ Params: { id: string }; Body: { dataUrl?: string } }>(
     "/api/bookmarks/:id/screenshot",
-    async (req, reply) => handleScreenshot("inspiration", req.params.id, req.body, reply, screenshotsDir)
+    async (req, reply) => handleScreenshot(opts.db ?? getDb(), req.params.id, req.body, reply, screenshotsDir)
   );
 
   // --- Story 3.2: the ONE generic skill-invocation route (AD11/FR-19) ---
