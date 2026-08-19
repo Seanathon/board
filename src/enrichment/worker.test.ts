@@ -10,6 +10,7 @@ import { eq } from 'drizzle-orm';
 import { initDb } from '../db/index.js';
 import { boards, items } from '../db/schema.js';
 import { runItemJob, type TimeoutFn } from '../db/queue.js';
+import { patchItemFields } from '../db/item-actions.js';
 import { disabledLlm, type LLMProvider } from '../skills/types.js';
 import { INSPIRATION_DESCRIPTOR } from '../db/seed.js';
 import { buildEnrichmentSchema, buildEnrichmentPrompt, runEnrichmentForItem } from './worker.js';
@@ -110,6 +111,30 @@ describe('runEnrichmentForItem (Story 7.1)', () => {
     assert.equal(f.note_field, undefined, 'non-enrichable field NOT written from enrichment');
     assert.equal(f.notes, undefined, 'system/user field not smuggled into fields');
     assert.equal(row?.notes, 'USER NOTE', 'user notes column untouched');
+  });
+
+  // Enrichment reads the item, awaits the LLM (tens of seconds), then writes the row
+  // back. Jobs and writes now run on separate lanes, so an interactive edit can land
+  // INSIDE that window — and a write assembled from the pre-LLM snapshot would silently
+  // revert it. The row is re-read inside the write op so the merge is against fresh
+  // state. (Under the old single lane this was impossible: the job held the write lane.)
+  it('does not clobber a user edit that lands while the LLM is running', async () => {
+    handle.db.insert(items).values({ id: 'e-race', boardId: 'nb', source: 'x', notes: 'before', fields: {} }).run();
+    const mock: LLMProvider = {
+      complete: async () => {
+        // the user edits notes + a user-owned field mid-flight, through the write lane
+        await patchItemFields(handle, 'e-race', { notes: 'EDITED MID-FLIGHT', note_field: 'USER VALUE' });
+        return { foo_score: 7 } as never;
+      },
+    };
+
+    await runEnrichmentForItem(handle, { itemId: 'e-race', llm: mock });
+
+    const row = handle.db.select().from(items).where(eq(items.id, 'e-race')).get();
+    const f = row?.fields as Record<string, unknown>;
+    assert.equal(row?.notes, 'EDITED MID-FLIGHT', 'a user edit during the LLM call must survive');
+    assert.equal(f.note_field, 'USER VALUE', 'a user field written mid-flight must survive');
+    assert.equal(f.foo_score, 7, 'and the enrichment result still lands');
   });
 
   // Title refinement: the LLM may return a `title`, written to the title COLUMN
