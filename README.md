@@ -35,6 +35,7 @@ the full annotated list). Empty/whitespace values are treated as unset.
 | `DATA_DIR` | `./data` | Persistent data root (SQLite DB + screenshots). |
 | `CHROME_PATH` | autodetect | System Chromium/Chrome binary; autodetected on Linux when unset. |
 | `LLM_AGENT` / `LLM_MODEL` / `LLM_BASE_URL` / `LLM_API_KEY` | unset | LLM provider. **Unset = no-AI** (enrichment disabled). |
+| `CAPTURE_TIMEOUT_MS` | `180000` | Budget for one capture job — page capture **and** the AI read share it. A CLI agent routinely takes 90–100s; raise it for slow local models. |
 | `BOARD_API_TOKEN` | unset | Bearer token for the `/api/v1` capture API. **Unset = the v1 API is off** (fail-closed). See [Integrations](docs/integrations.md). |
 
 ## Security & the reverse-proxy model
@@ -77,6 +78,10 @@ bookmarklet, agents).
 
 ## Self-hosting on a Debian LXC (systemd)
 
+> Deploying for real? [**docs/self-hosting.md**](docs/self-hosting.md) covers container
+> sizing, cross-host reverse proxies, CLI-agent setup, backups, and a troubleshooting
+> table — the things that bite once you're past the quick start.
+
 One command on a fresh Debian LXC (run as root, from the repo root):
 
 ```bash
@@ -109,12 +114,38 @@ The unit binds `127.0.0.1:8080`. To reach board-oss beyond the box, front it wit
 reverse proxy that provides auth + TLS — **Caddy + Authelia**, or a **Tailscale**
 tailnet. Don't expose the port directly; v1 has no app-level auth (see above).
 
+**If the proxy runs on a different host**, loopback isn't reachable from it and the
+proxy will 502 while `/healthz` passes inside the container. Bind wider and restrict
+at the network layer instead:
+
+```bash
+systemctl edit board-oss     # [Service]  Environment=HOST=0.0.0.0
+systemctl restart board-oss
+```
+
+Use a **drop-in**, not an edit to the installed unit file: `scripts/install-lxc.sh`
+rewrites `/etc/systemd/system/board-oss.service`, so an in-place change is silently
+reverted on the next upgrade.
+
 ### Enabling AI (optional)
 
 board-oss runs fully with no AI (enrichment shows a dignified "disabled" state). To
 enable analysis, set the provider env on the unit (`Environment=LLM_BASE_URL=…
 LLM_API_KEY=… LLM_MODEL=…` or a CLI agent via `LLM_AGENT`) and `systemctl restart
 board-oss`.
+
+A **CLI agent** (`LLM_AGENT=claude` / `codex`) has three failure modes that produce no
+obvious error. board-oss spawns the agent by bare command name, so:
+
+- **systemd's `PATH` is minimal** and won't find a binary your login shell finds —
+  set `Environment=PATH=…` or install a wrapper.
+- **Authentication is interactive** and must be done *as the service user* with the
+  unit's `HOME` (`/var/lib/board-oss`), or the service can't read the credentials.
+- **Running the agent as root doesn't test what the service does** — it inherits a
+  different `HOME` and cwd.
+
+[**docs/self-hosting.md**](docs/self-hosting.md) walks through all three with
+verification commands.
 
 ### Docker
 
@@ -148,6 +179,17 @@ asserting `/healthz` and a real in-container screenshot capture.
 Your data is a plain SQLite file plus a `screenshots/` directory under `DATA_DIR` —
 copy the directory and walk away. Upgrading the code (a `git pull` / container
 rebuild) never touches `DATA_DIR`.
+
+For moving between machines, board-oss exports everything — boards, items, and the
+image files — as a single `.tar` you can restore anywhere. In the app: the button in
+the bottom-right → **Your data**. Or `GET /api/backup`. It's a plain ustar archive
+(`manifest.json` + `screenshots/`), readable with `tar` and without this app, and
+restoring is non-destructive: existing boards keep their fields and existing items
+are skipped rather than overwritten.
+
+A container snapshot is a *different* backup — it protects the install, the systemd
+config and any agent credentials, which the collection export deliberately doesn't
+carry. Run both.
 
 ## License
 

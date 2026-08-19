@@ -167,7 +167,7 @@ describe('imported item status', () => {
   // Library enrichment lives under a different set of keys than Inspiration's
   // meta.*/design.* — a predicate that only knows one board's shape leaves the other
   // board's items stranded at 'pending'.
-  it('recognises library-shaped enrichment too, not just the inspiration shape', async () => {
+  it('recognizes library-shaped enrichment too, not just the inspiration shape', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'board-oss-import-lib-status-'));
     const handle = initDb(join(dir, 'c.db'));
     try {

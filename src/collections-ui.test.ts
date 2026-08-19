@@ -513,7 +513,7 @@ test("safeErrorReason passes through the known user-safe reasons", () => {
   assert.equal(safeErrorReason({ error_reason: "interrupted" }), "interrupted");
 });
 
-test("safeErrorReason replaces anything unrecognised with a generic message", () => {
+test("safeErrorReason replaces anything unrecognized with a generic message", () => {
   assert.equal(safeErrorReason({ error_reason: "ECONNREFUSED 10.0.0.4:8080 at Socket.emit" }), "Couldn't analyze this item");
   assert.equal(safeErrorReason({ error_reason: "sk-ant-secret leaked" }), "Couldn't analyze this item");
   assert.equal(safeErrorReason({}), "Couldn't analyze this item");

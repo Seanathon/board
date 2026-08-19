@@ -459,7 +459,7 @@ async function analyze(
     fs.writeFileSync(schemaFile, JSON.stringify(outputSchema));
     // Resolve the lens at call time so an override saved in the UI takes effect on the
     // next capture without a restart. Opened lazily: this path must still work on a
-    // box that has never initialised a database.
+    // box that has never initialized a database.
     let systemPrompt = processor.systemPrompt;
     try {
       const handle = initDb(config.dbPath);
