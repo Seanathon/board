@@ -24,7 +24,7 @@ import type { DbHandle } from './index.js';
 // duration (Chrome launch + LLM round-trip). That made every interactive write wait on
 // unrelated network I/O: `addItemSkill`'s one-row INSERT — and so POST /api/collections
 // /:cid/items — blocked for the length of the running capture (measured: 42s with one
-// job in flight; up to CAPTURE_TIMEOUT_MS = 180s), which read to users as the add
+// job in flight; up to CAPTURE_TIMEOUT_MS), which read to users as the add
 // silently hanging.
 //
 // The two constraints being collapsed were never the same constraint:

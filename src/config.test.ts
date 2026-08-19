@@ -171,12 +171,17 @@ describe('snapshotsDir (Story 16.1)', () => {
 // the original fixed 60s an ordinary Claude-CLI enrichment could exhaust the budget
 // and land the item in `error: timed out` with a captured page already in hand.
 describe('capture timeout budget', () => {
+  // The default must EXCEED the sum of the parts it contains, or it silently truncates
+  // them: navigation (120s) + network settle (30s) + the CLI agent's own 300s ceiling.
   it('defaults to a budget that fits capture plus an LLM read', () => {
-    assert.equal(loadConfig({}).captureTimeoutMs, 180_000);
+    assert.ok(
+      loadConfig({}).captureTimeoutMs >= 120_000 + 30_000 + 300_000,
+      'default must leave room for navigation + settle + the agent wall-clock',
+    );
   });
 
   it('is overridable for slow local models', () => {
-    assert.equal(loadConfig({ CAPTURE_TIMEOUT_MS: '600000' }).captureTimeoutMs, 600_000);
+    assert.equal(loadConfig({ CAPTURE_TIMEOUT_MS: '900000' }).captureTimeoutMs, 900_000);
   });
 
   it('rejects a non-numeric or zero value', () => {

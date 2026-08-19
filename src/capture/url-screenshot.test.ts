@@ -59,6 +59,42 @@ describe('url-screenshot adapter (Story 6.2)', () => {
     assert.equal(fb.isClosed(), true, 'browser must be closed on the error path');
   });
 
+  // Pages with a persistent connection (analytics socket, chat widget, video preload)
+  // never reach `networkidle2`, and a slow connection pushes an ordinary page past the
+  // 30s nav budget — either way navigation threw and the item died as "Timed out."
+  // Reproduced against twenty.com and stigg.io under CDP throttling: goto rejected at
+  // 30755ms with `TimeoutError: Navigation timeout of 30000 ms exceeded`, which
+  // cleanErrorReason maps to 'timed out'. A quiet network is a nice-to-have for a
+  // screenshot, not a preconditio — capture must degrade to "shot slightly early".
+  it('still captures a page whose network never goes quiet', async () => {
+    let idleAttempted = false;
+    let closed = false;
+    const page = {
+      setViewport: async () => {},
+      // Mirrors puppeteer: waiting for a quiet network on such a page rejects.
+      goto: async (_url: string, opts: { waitUntil: string }) => {
+        if (opts.waitUntil === 'networkidle2') throw new Error('Navigation timeout of 30000 ms exceeded');
+      },
+      waitForNetworkIdle: async () => {
+        idleAttempted = true;
+        throw new Error('Timed out waiting for the network to be idle');
+      },
+      screenshot: async () => Buffer.from('PNGDATA'),
+      evaluate: async (fn: (...a: unknown[]) => unknown) =>
+        fn.toString().includes('document.title') ? { title: 'Chatty', text: 'body text' } : undefined,
+    };
+    const browser: CaptureBrowser = { newPage: async () => page as never, close: async () => { closed = true; } };
+
+    const adapter = createUrlScreenshotAdapter({ launch: async () => browser, sleep: async () => {} });
+    const out = await adapter.fetch('https://chatty.example', { itemId: 'shot3', boardId: 'b', screenshotsDir: dir });
+
+    assert.equal(idleAttempted, true, 'should still TRY to let the network settle');
+    assert.equal(out.fields.title, 'Chatty', 'capture succeeds despite the noisy network');
+    assert.equal(out.assets.length, 1, 'a screenshot is still produced');
+    assert.ok(existsSync(join(dir, 'shot3.png')), 'image written');
+    assert.equal(closed, true, 'browser closed');
+  });
+
   // AC 1 — registered for ingest_mode url-screenshot
   it('declares ingest_mode = url-screenshot', () => {
     const adapter = createUrlScreenshotAdapter();

@@ -39,8 +39,15 @@ export interface Config {
    * Budget for ONE capture job, which covers headless capture AND the LLM read
    * together (they share a job so the item holds a single `processing` state). The
    * old fixed 60s was tight enough that an ordinary CLI-provider enrichment could
-   * exhaust it and fail an item whose page had already been captured. Raise it for
-   * slow local models via CAPTURE_TIMEOUT_MS.
+   * exhaust it and fail an item whose page had already been captured. Tune via
+   * CAPTURE_TIMEOUT_MS.
+   *
+   * It must comfortably EXCEED the sum of its parts, or it silently truncates them:
+   * navigation (120s) + network settle (30s) + fixed waits (~1.5s) + the CLI agent's
+   * own 300s wall-clock. Generous by design — board-oss is single-tenant, so nothing
+   * is queued behind you competing for the worker, and this ceiling exists to stop a
+   * genuinely wedged job rather than to enforce a latency SLO. A typical add finishes
+   * in ~40-50s and never approaches it.
    */
   captureTimeoutMs: number;
   provider: ProviderConfig;
@@ -160,7 +167,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     screenshotsDir: path.join(dataDir, 'screenshots'),
     snapshotsDir: path.join(dataDir, 'snapshots'),
     chromePath: clean(env.CHROME_PATH) ?? null,
-    captureTimeoutMs: parsePositiveMs(env.CAPTURE_TIMEOUT_MS, 180_000),
+    captureTimeoutMs: parsePositiveMs(env.CAPTURE_TIMEOUT_MS, 600_000),
     provider,
     // Enabled when a transport is configured (agent OR base-URL/key). A model name
     // alone does not enable AI.

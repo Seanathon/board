@@ -33,7 +33,9 @@ const IMAGE_EXT: Record<string, string> = {
   'image/webp': 'webp',
 };
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024; // a hero image over ~12MB is almost certainly wrong
-const IMAGE_TIMEOUT_MS = 8000;
+// A hero image can be several MB; 8s dropped it on any slow link, and the card then
+// fell back to its no-image placeholder with no sign anything had gone wrong.
+const IMAGE_TIMEOUT_MS = 30_000;
 
 interface Deps {
   fetchImpl?: typeof fetch;

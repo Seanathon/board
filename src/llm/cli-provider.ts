@@ -51,7 +51,11 @@ export interface CliProviderConfig {
   logger?: Logger;
 }
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+// Wall-clock ceiling for one agent subprocess. Generous on purpose: a self-hosted,
+// single-tenant box has nobody queued behind this call, so a read that takes four
+// minutes and returns beats one killed at two that leaves the item un-enriched. Sized
+// to sit inside config.captureTimeoutMs alongside the capture that precedes it.
+const DEFAULT_TIMEOUT_MS = 300_000;
 // Bound captured output so a runaway agent can't exhaust memory on the small LXC
 // (mirrors the prototype's spawnSync maxBuffer, which the async port must preserve).
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
