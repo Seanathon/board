@@ -1,11 +1,13 @@
-import { createHash } from 'node:crypto';
+import { beginItemLease, currentLeaseItem, invalidateItemLease } from '../db/item-lease.js';
+import { statusHub } from '../sse.js';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 
 import { eq } from 'drizzle-orm';
 
 import { items, type NewAsset } from '../db/schema.js';
-import { writeItem } from '../db/queue.js';
+import { enqueueWrite, writeItemDirect } from '../db/queue.js';
 import type { DbHandle } from '../db/index.js';
 
 // Story 6.4 — manual asset upload: the graceful escape hatch (FR-5) when auto-capture
@@ -52,27 +54,33 @@ export async function uploadAssetForItem(
 ): Promise<string> {
   const { buffer, ext } = decodeImageDataUrl(args.dataUrl, args.maxBytes ?? MAX_UPLOAD_BYTES);
 
-  const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
-  if (!item) {
-    throw new Error(`Cannot upload: unknown item "${args.itemId}"`);
-  }
+  const lease = beginItemLease(handle, args.itemId, false);
+  return enqueueWrite(() => {
+    const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
+    if (!item) {
+      throw new Error(`Cannot upload: unknown item "${args.itemId}"`);
+    }
 
-  const filename = `${args.itemId}.${ext}`;
-  const abs = join(args.screenshotsDir, filename);
-  // SECURITY: `itemId` is untrusted (the importer preserves arbitrary record ids), so
-  // a crafted id like "../../etc/cron.d/foo" must not escape screenshotsDir. Assert
-  // containment BEFORE writing anything.
-  const dirRoot = resolve(args.screenshotsDir);
-  if (!resolve(abs).startsWith(dirRoot + sep)) {
-    throw new Error(`Invalid item id for upload path: "${args.itemId}"`);
-  }
-  mkdirSync(dirname(abs), { recursive: true });
-  writeFileSync(abs, buffer);
-  const hash = createHash('sha256').update(buffer).digest('hex');
-  const path = `screenshots/${filename}`; // relative form (Story 2.2)
+    if (!currentLeaseItem(handle, lease)) throw new Error('Upload superseded');
+    const filename = `${args.itemId}-${randomUUID()}.${ext}`;
+    const abs = join(args.screenshotsDir, filename);
+    // SECURITY: `itemId` is untrusted (the importer preserves arbitrary record ids), so
+    // a crafted id like "../../etc/cron.d/foo" must not escape screenshotsDir. Assert
+    // containment BEFORE writing anything.
+    const dirRoot = resolve(args.screenshotsDir);
+    if (!resolve(abs).startsWith(dirRoot + sep)) {
+      throw new Error(`Invalid item id for upload path: "${args.itemId}"`);
+    }
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, buffer, { flag: 'wx' });
+    const hash = createHash('sha256').update(buffer).digest('hex');
+    const path = `screenshots/${filename}`; // relative form (Story 2.2)
 
-  const asset: NewAsset = { id: `${args.itemId}-upload`, itemId: args.itemId, kind: 'screenshot', path, hash };
-  await writeItem(handle, { ...item, id: args.itemId, boardId: item.boardId }, [asset]);
+    const asset: NewAsset = { id: `${args.itemId}-upload`, itemId: args.itemId, kind: 'screenshot', path, hash };
+    writeItemDirect(handle, { ...item, id: args.itemId, boardId: item.boardId, status: 'done', errorReason: null }, [asset]);
+    invalidateItemLease(handle, args.itemId);
+    statusHub.publish({ itemId: item.id, boardId: item.boardId, status: 'done', fields: (item.fields ?? {}) as Record<string, unknown> });
 
-  return path;
+    return path;
+  });
 }

@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { createUrlScreenshotAdapter, type CaptureBrowser } from './url-screenshot.js';
 
@@ -40,11 +40,11 @@ describe('url-screenshot adapter (Story 6.2)', () => {
     assert.equal(out.assets.length, 1);
     const asset = out.assets[0];
     assert.equal(asset.kind, 'screenshot');
-    assert.equal(asset.path, 'screenshots/shot1.png'); // relative form (Story 2.2)
+    assert.match(asset.path!, /^screenshots\/shot1-[a-f0-9-]+\.png$/); // relative form (Story 2.2)
     assert.equal(asset.width, 1440);
     assert.equal(asset.height, 900);
     assert.ok(asset.hash && asset.hash.length > 0, 'asset has a content hash');
-    assert.ok(existsSync(join(dir, 'shot1.png')), 'image written under screenshotsDir');
+    assert.ok(existsSync(join(dir, basename(asset.path!))), 'image written under screenshotsDir');
     assert.equal(fb.isClosed(), true, 'browser closed on success');
   });
 
@@ -91,7 +91,7 @@ describe('url-screenshot adapter (Story 6.2)', () => {
     assert.equal(idleAttempted, true, 'should still TRY to let the network settle');
     assert.equal(out.fields.title, 'Chatty', 'capture succeeds despite the noisy network');
     assert.equal(out.assets.length, 1, 'a screenshot is still produced');
-    assert.ok(existsSync(join(dir, 'shot3.png')), 'image written');
+    assert.ok(existsSync(join(dir, basename(out.assets[0].path!))), 'image written');
     assert.equal(closed, true, 'browser closed');
   });
 

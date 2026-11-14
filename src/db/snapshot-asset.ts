@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -39,7 +39,7 @@ export interface WriteSnapshotOpts {
 
 const defaultWriteFile = (absPath: string, buf: Buffer): void => {
   mkdirSync(dirname(absPath), { recursive: true });
-  writeFileSync(absPath, buf);
+  writeFileSync(absPath, buf, { flag: 'wx' });
 };
 
 /** Convenience: build a SnapshotCapture from raw HTML (hashes + measures). */
@@ -66,7 +66,7 @@ export function writeSnapshotAssetDirect(
   opts: WriteSnapshotOpts,
 ): { written: boolean; asset?: SnapshotAssetRef } {
   const id = `${itemId}-snapshot`;
-  const filename = `${itemId}.html`;
+  const filename = `${itemId}-${randomUUID()}.html`;
   const relPath = `snapshots/${filename}`; // relative form (Story 2.2), mirrors screenshots/<id>.png
   const abs = join(opts.snapshotsDir, filename);
 

@@ -1,3 +1,4 @@
+import { invalidateAllItemLeases } from '../db/item-lease.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
@@ -49,6 +50,7 @@ export const wipeItemsSkill = defineSkill(
     await enqueueTransaction(ctx.db, () => {
       ctx.db.db.delete(assets).run();
       ctx.db.db.delete(items).run();
+      invalidateAllItemLeases(ctx.db);
       ctx.db.sqlite.prepare('DELETE FROM item_fts').run();
     });
 

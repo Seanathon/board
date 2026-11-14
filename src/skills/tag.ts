@@ -1,8 +1,9 @@
+import { markManualFields } from '../db/item-lease.js';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
 import { boards, items } from '../db/schema.js';
-import { writeItem } from '../db/queue.js';
+import { enqueueWrite, writeItemDirect } from '../db/queue.js';
 import type { BoardDescriptor } from '../descriptor/types.js';
 import { defineSkill } from './types.js';
 
@@ -18,7 +19,7 @@ export const tagSkill = defineSkill(
   'tag',
   z.object({ itemId: z.string().min(1), tags: z.array(z.string()) }),
   z.object({ itemId: z.string(), tags: z.array(z.string()) }),
-  async (input, ctx) => {
+  async (input, ctx) => enqueueWrite(() => {
     const item = ctx.db.db.select().from(items).where(eq(items.id, input.itemId)).get();
     if (!item) {
       throw new Error(`Cannot tag: unknown item "${input.itemId}"`);
@@ -30,8 +31,9 @@ export const tagSkill = defineSkill(
     const fields = { ...((item.fields as Record<string, unknown>) ?? {}), [tagsKey]: input.tags };
     // Pass the FULL item (merged fields) so writeItem recomputes search_blob from
     // the complete row — never dropping title/notes — and re-syncs FTS atomically.
-    await writeItem(ctx.db, { ...item, fields });
+    writeItemDirect(ctx.db, { ...item, fields });
+    markManualFields(ctx.db, item.id, [tagsKey]);
 
     return { itemId: item.id, tags: input.tags };
-  },
+  }),
 );

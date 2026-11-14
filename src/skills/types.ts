@@ -30,8 +30,15 @@ export interface JobQueue {
  * The canonical LLM provider interface (architecture §4.2). Epic 4 implements the
  * HTTP + CLI transports against THIS type — it does not redefine it.
  */
+export interface CompletionContext {
+  itemId: string;
+  boardId: string;
+  source: string | null;
+  signal?: AbortSignal;
+}
+
 export interface LLMProvider {
-  complete<T>(prompt: string, schema: ZodType<T>): Promise<T>;
+  complete<T>(prompt: string, schema: ZodType<T>, context?: CompletionContext): Promise<T>;
 }
 
 /** Thrown by `disabledLlm.complete` when no provider is configured (no-AI mode). */

@@ -243,7 +243,7 @@ test("POST /api/collections/:cid/items/:id/screenshot uploads to a composed (SQL
     assert.ok(updated.screenshot, "the hydrated item should now carry a screenshot path");
 
     // The file landed under the injected screenshotsDir and is served (assets don't 404).
-    assert.ok(fs.existsSync(path.join(shotDir, "wl-1.png")), "image must be written under screenshotsDir");
+    assert.ok(fs.existsSync(path.join(shotDir, path.basename(updated.screenshot))), "image must be written under screenshotsDir");
     const served = await app.inject({ method: "GET", url: `/${updated.screenshot}` });
     assert.equal(served.statusCode, 200, "uploaded image should be served");
     assert.ok(served.rawPayload.length > 0);

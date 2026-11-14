@@ -1,3 +1,6 @@
+import { eq } from 'drizzle-orm';
+import { items } from '../db/schema.js';
+import { currentLeaseItem } from '../db/item-lease.js';
 import { runItemJob, type JobResult, type TimeoutFn } from '../db/queue.js';
 import { runCaptureForItem, type CaptureRegistry, type CaptureSource } from '../capture/adapter.js';
 import { runEnrichmentForItem } from './worker.js';
@@ -44,6 +47,10 @@ export interface CaptureEnrichArgs {
  * Capture's browser teardown is awaited by the worker before the next capture (6.5).
  */
 export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): Promise<JobResult> {
+  const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
+  if (!item || item.boardId !== args.boardId || (typeof args.source === 'string' && item.source !== args.source)) {
+    return Promise.resolve({ type: 'capture', ok: false, error: 'Item changed before job admission' });
+  }
   let captureTeardown: (() => Promise<void>) | undefined;
   const canCapture =
     !!args.source &&
@@ -56,21 +63,24 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
     type: 'capture',
     timeoutMs: args.timeoutMs ?? config.captureTimeoutMs,
     timeoutFn: args.timeoutFn,
-    work: async (signal) => {
+    work: async (signal, lease) => {
+      const current = currentLeaseItem(handle, lease, signal);
+      if (!current || current.boardId !== args.boardId || (typeof args.source === 'string' && current.source !== args.source)) return;
       if (canCapture) {
         await runCaptureForItem(handle, args.registry, {
           itemId: args.itemId,
           boardId: args.boardId,
           source: args.source as CaptureSource,
           signal,
+          lease,
           screenshotsDir: args.screenshotsDir,
           registerTeardown: (fn) => { captureTeardown = fn; },
         });
       }
       // Cheap tier (Inbox): skip the enrich hop entirely so llm.complete is never
       // reached — the AI takeaway is earned on assignment (Epic 14), not on capture.
-      if (args.tier !== 'cheap') {
-        await runEnrichmentForItem(handle, { itemId: args.itemId, llm: args.llm, signal });
+      if (args.tier !== 'cheap' && currentLeaseItem(handle, lease, signal)) {
+        await runEnrichmentForItem(handle, { itemId: args.itemId, llm: args.llm, signal, lease });
       }
     },
     teardown: async () => { if (captureTeardown) await captureTeardown(); },

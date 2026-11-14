@@ -59,7 +59,7 @@ describe('url-readable adapter (Story 6.3)', () => {
 
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 const HTML_WITH_OG = `<!doctype html><html><head><title>Edifier R1280T</title>
   <meta property="og:image" content="https://cdn.example/r1280t.jpg"></head>
@@ -89,8 +89,8 @@ describe('url-readable adapter — og:image hero image', () => {
       const out = await adapter.fetch('https://shop.example/r1280t', { itemId: 'w1', boardId: 'b', screenshotsDir: dir });
       assert.equal(out.assets.length, 1, 'one image asset emitted');
       assert.equal(out.assets[0].kind, 'image');
-      assert.equal(out.assets[0].path, 'screenshots/w1-og.jpg');
-      assert.ok(existsSync(join(dir, 'w1-og.jpg')), 'image file written to screenshotsDir');
+      assert.match(out.assets[0].path!, /^screenshots\/w1-og-[a-f0-9-]+\.jpg$/);
+      assert.ok(existsSync(join(dir, basename(out.assets[0].path!))), 'image file written to screenshotsDir');
       assert.match(String(out.fields.text), /Edifier R1280T/, 'text capture still succeeds');
     } finally {
       rmSync(dir, { recursive: true, force: true });

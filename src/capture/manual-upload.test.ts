@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { eq } from 'drizzle-orm';
 
@@ -51,12 +51,12 @@ describe('uploadAssetForItem (Story 6.4)', () => {
   // AC 1/2/3 — stores the file under screenshotsDir + creates a linked asset row
   it('writes the image under screenshotsDir and creates a linked asset row', async () => {
     const path = await uploadAssetForItem(handle, { itemId: 'it', dataUrl: PNG_DATA_URL, screenshotsDir: shotDir });
-    assert.match(path, /^screenshots\/it\.png$/);
-    assert.ok(existsSync(join(shotDir, 'it.png')), 'file written under the temp screenshotsDir');
+    assert.match(path, /^screenshots\/it-[a-f0-9-]+\.png$/);
+    assert.ok(existsSync(join(shotDir, basename(path))), 'file written under the temp screenshotsDir');
 
     const row = handle.db.select().from(assets).where(eq(assets.itemId, 'it')).all();
     assert.equal(row.length, 1);
-    assert.equal(row[0].path, 'screenshots/it.png');
+    assert.equal(row[0].path, path);
     assert.ok(row[0].hash && row[0].hash.length > 0, 'asset has a content hash');
   });
 

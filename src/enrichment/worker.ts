@@ -1,3 +1,4 @@
+import { manualFieldSnapshot, manualFieldUnchanged, beginItemLease, signalItemLease, currentLeaseItem, unchangedField, type ItemLease } from '../db/item-lease.js';
 import { z, type ZodType } from 'zod';
 
 import { eq } from 'drizzle-orm';
@@ -81,16 +82,19 @@ ${capturedText}`;
  * Run enrichment for a captured item: build prompt + schema from its board
  * descriptor, call `llm.complete`, then write ONLY the enrichable field keys into
  * `item.fields` (filtered defensively to enrichableTargets) via the DIRECT item
- * write (this runs INSIDE the worker job — `writeItem` would deadlock). Refreshes
+ * write inside the write lane, independently of the job lane. Refreshes
  * search_blob/FTS. Lets EnrichmentDisabledError / LLMSchemaError / LLMTransportError
  * propagate to the Story 5.2 classifier.
  */
 export async function runEnrichmentForItem(
   handle: DbHandle,
-  args: { itemId: string; llm: LLMProvider; signal?: AbortSignal },
+  args: { itemId: string; llm: LLMProvider; signal?: AbortSignal; lease?: ItemLease },
 ): Promise<void> {
   const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
   if (!item) throw new Error(`Cannot enrich: unknown item "${args.itemId}"`);
+  const fieldRevisions = manualFieldSnapshot(handle, args.itemId);
+  const lease = args.lease ?? signalItemLease(args.signal) ?? beginItemLease(handle, args.itemId);
+  if (!currentLeaseItem(handle, lease, args.signal)) return;
   const board = handle.db.select().from(boards).where(eq(boards.id, item.boardId)).get();
   const descriptor = board?.descriptor as BoardDescriptor | undefined;
   if (!descriptor) throw new Error(`Cannot enrich: board "${item.boardId}" has no descriptor`);
@@ -105,7 +109,7 @@ export async function runEnrichmentForItem(
   const schema = fieldSchema.extend({ title: z.string().optional() });
 
   const prompt = buildEnrichmentPrompt(descriptor, item);
-  const result = await args.llm.complete(prompt, schema); // may throw (disabled/schema/transport)
+  const result = await args.llm.complete(prompt, schema, { itemId: item.id, boardId: item.boardId, source: item.source, signal: args.signal }); // may throw (disabled/schema/transport)
 
   // Write ONLY allowed keys (defensive filter — never overwrite user/system fields).
   // `title` is handled separately (column, not a field); an omitted/blank title leaves
@@ -127,10 +131,16 @@ export async function runEnrichmentForItem(
   // revert it. Enqueued rather than direct: jobs and writes are separate lanes now, so
   // a write from inside a job no longer self-deadlocks.
   await enqueueWrite(() => {
-    const fresh = handle.db.select().from(items).where(eq(items.id, args.itemId)).get() ?? item;
+    const fresh = currentLeaseItem(handle, lease, args.signal);
+    if (!fresh) return;
+    const freshFields = (fresh.fields ?? {}) as Record<string, unknown>;
+    if (!unchangedField((item.fields ?? {}) as Record<string, unknown>, freshFields, 'text')) return;
+    for (const key of Object.keys(enriched)) {
+      if (!manualFieldUnchanged(handle, args.itemId, fieldRevisions, key) || !unchangedField((item.fields ?? {}) as Record<string, unknown>, freshFields, key)) delete enriched[key];
+    }
     writeItemDirect(handle, {
       ...fresh,
-      ...titleUpdate,
+      ...(fresh.title === item.title ? titleUpdate : {}),
       id: item.id,
       boardId: item.boardId,
       fields: { ...((fresh.fields as Record<string, unknown>) ?? {}), ...enriched },

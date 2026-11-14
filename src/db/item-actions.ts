@@ -1,10 +1,11 @@
+import { markManualFields } from './item-lease.js';
 import { basename, dirname, join } from 'node:path';
 import { existsSync, unlinkSync } from 'node:fs';
 
 import { eq } from 'drizzle-orm';
 
 import { assets, boards, items, type Item } from './schema.js';
-import { writeItem, deleteItem } from './queue.js';
+import { enqueueWrite, writeItemDirect, deleteItem } from './queue.js';
 import type { BoardDescriptor } from '../descriptor/types.js';
 import type { DbHandle } from './index.js';
 
@@ -27,31 +28,34 @@ export async function patchItemFields(
   itemId: string,
   patch: Record<string, unknown>,
 ): Promise<Item | undefined> {
-  const item = handle.db.select().from(items).where(eq(items.id, itemId)).get();
-  if (!item) return undefined;
-  const board = handle.db.select().from(boards).where(eq(boards.id, item.boardId)).get();
-  const descriptor = board?.descriptor as BoardDescriptor | undefined;
-  const allowedFieldKeys = new Set(
-    (descriptor?.fields ?? []).filter((f) => f.enrichable === false).map((f) => f.key),
-  );
+  return enqueueWrite(() => {
+    const item = handle.db.select().from(items).where(eq(items.id, itemId)).get();
+    if (!item) return undefined;
+    const board = handle.db.select().from(boards).where(eq(boards.id, item.boardId)).get();
+    const descriptor = board?.descriptor as BoardDescriptor | undefined;
+    const allowedFieldKeys = new Set(
+      (descriptor?.fields ?? []).filter((f) => f.enrichable === false).map((f) => f.key),
+    );
 
-  const columnUpdates: Record<string, unknown> = {};
-  const fieldUpdates: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (USER_COLUMNS.has(key)) {
-      columnUpdates[key] = key === 'favorite' ? (value ? 1 : 0) : value;
-    } else if (allowedFieldKeys.has(key)) {
-      fieldUpdates[key] = value;
+    const columnUpdates: Record<string, unknown> = {};
+    const fieldUpdates: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (USER_COLUMNS.has(key)) {
+        columnUpdates[key] = key === 'favorite' ? (value ? 1 : 0) : value;
+      } else if (allowedFieldKeys.has(key)) {
+        fieldUpdates[key] = value;
+      }
+      // else: disallowed (status / enriched / unknown) → silently ignored.
     }
-    // else: disallowed (status / enriched / unknown) → silently ignored.
-  }
 
-  const fields = { ...((item.fields as Record<string, unknown>) ?? {}), ...fieldUpdates };
-  // Bump updatedAt (seconds, matching the unixepoch() DB default) so a future
-  // "recently edited" sort sees curation edits.
-  const updatedAt = Math.floor(Date.now() / 1000);
-  await writeItem(handle, { ...item, ...columnUpdates, updatedAt, fields });
-  return handle.db.select().from(items).where(eq(items.id, itemId)).get();
+    const fields = { ...((item.fields as Record<string, unknown>) ?? {}), ...fieldUpdates };
+    // Bump updatedAt (seconds, matching the unixepoch() DB default) so a future
+    // "recently edited" sort sees curation edits.
+    const updatedAt = Math.floor(Date.now() / 1000);
+    writeItemDirect(handle, { ...item, ...columnUpdates, updatedAt, fields });
+    markManualFields(handle, itemId, [...Object.keys(columnUpdates), ...Object.keys(fieldUpdates)]);
+    return handle.db.select().from(items).where(eq(items.id, itemId)).get();
+  });
 }
 
 /**
