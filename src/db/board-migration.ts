@@ -68,8 +68,12 @@ const fieldsOf = (row: Item): Record<string, unknown> => {
 };
 function safeKey(key: string): void {
   const root = key.split('.')[0];
-  const reserved = new Set([...SYSTEM_COLUMNS, 'url', 'screenshot', 'added', 'queuePosition', 'errorReason']);
-  if (!/^[a-z0-9_]+(\.[a-z0-9_]+)?$/.test(key) || key.split('.').some(p => ['__proto__', 'prototype', 'constructor'].includes(p)) || reserved.has(root)) fail('unsafe field key');
+  if (!/^[a-z0-9_]+(\.[a-z0-9_]+)?$/.test(key) || key.split('.').some(p => ['__proto__', 'prototype', 'constructor'].includes(p)) || SYSTEM_COLUMNS.has(root)) fail('unsafe field key');
+}
+function safeWriteKey(key: string): void {
+  safeKey(key);
+  // Display declarations may use these aliases; migration patches must never own them.
+  if (['url', 'screenshot', 'added', 'queuePosition', 'errorReason'].includes(key.split('.')[0])) fail('unsafe field key');
 }
 function descriptor(value: unknown): BoardDescriptor {
   const result = validateDescriptorProposal(value);
@@ -102,7 +106,7 @@ function bundle(value: unknown): Bundle {
     if (!b.expectedItemIds.includes(p.id)) fail('patch outside expected membership');
     const changed = [...Object.keys(p.set), ...p.unset];
     if (!changed.length || new Set(changed).size !== changed.length) fail('empty or duplicate patch keys');
-    for (const k of [...Object.keys(p.expected.fields), ...changed]) safeKey(k);
+    for (const k of [...Object.keys(p.expected.fields), ...changed]) safeWriteKey(k);
     for (const k of changed) {
       const before = oldByKey.get(k), after = next.fields.find(f => f.key === k);
       const safeBefore = before?.enrichable === true && !['image', 'url'].includes(before.type);

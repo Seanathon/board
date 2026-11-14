@@ -9,6 +9,7 @@ import { initDb } from './index.js';
 import { boards, items, assets, type Item } from './schema.js';
 import { writeItem } from './queue.js';
 import { patchItemFields } from './item-actions.js';
+import { validateDescriptorProposal } from '../descriptor/guardrails.js';
 import { applyMigration, canonicalJson, openMigrationDb, planMigration, undoMigration, verifyMigration, type MigrationBundle } from './board-migration.js';
 import { runMigrationCli } from './board-migration-cli.js';
 
@@ -381,5 +382,117 @@ test('undo exactly restores independent board view when it differs from descript
     await undoMigration(f.handle, 'op-a', f.data, ack);
     assert.deepEqual(f.handle.db.select().from(boards).where(eq(boards.id, 'board-a')).get(), before);
     assert.equal(verifyMigration(f.handle, 'op-a', f.data).state, 'undone');
+  } finally { f.cleanup(); }
+});
+
+
+const displayAliases = [
+  { key: 'url', label: 'URL', type: 'url', enrichable: false },
+  { key: 'screenshot', label: 'Preview', type: 'image', enrichable: false },
+];
+function declareAliases(f: Awaited<ReturnType<typeof fixture>>, before = true): void {
+  if (before) {
+    (f.input.expectedDescriptor as typeof oldDescriptor).fields.push(...structuredClone(displayAliases));
+    f.handle.db.update(boards).set({ descriptor: f.input.expectedDescriptor as typeof oldDescriptor }).where(eq(boards.id, 'board-a')).run();
+  }
+  (f.input.descriptor as typeof nextDescriptor).fields.push(...structuredClone(displayAliases));
+}
+
+test('valid unchanged URL and image display declarations survive guarded migration and undo', async () => {
+  const f = await fixture();
+  try {
+    declareAliases(f);
+    assert.equal(validateDescriptorProposal(f.input.expectedDescriptor).ok, true);
+    assert.equal(validateDescriptorProposal(f.input.descriptor).ok, true);
+    const before = f.row(), assetRows = f.handle.db.select().from(assets).all();
+    assert.ok(f.plan().digest);
+    await f.apply();
+    assert.equal(f.row().source, before.source);
+    assert.equal(Object.hasOwn(f.row().fields as object, 'url'), false);
+    assert.equal(Object.hasOwn(f.row().fields as object, 'screenshot'), false);
+    assert.deepEqual(f.handle.db.select().from(assets).all(), assetRows);
+    assert.equal(verifyMigration(f.handle, 'op-a', f.data).state, 'applied');
+    await undoMigration(f.handle, 'op-a', f.data, ack);
+    assert.deepEqual(f.handle.db.select().from(boards).where(eq(boards.id, 'board-a')).get()!.descriptor, f.input.expectedDescriptor);
+    assert.equal(verifyMigration(f.handle, 'op-a', f.data).state, 'undone');
+  } finally { f.cleanup(); }
+});
+
+test('display declarations may be added but existing protected declarations cannot be removed', async () => {
+  const f = await fixture();
+  try {
+    declareAliases(f, false);
+    assert.ok(f.plan().digest);
+    (f.input.expectedDescriptor as typeof oldDescriptor).fields.push(...structuredClone(displayAliases));
+    f.handle.db.update(boards).set({ descriptor: f.input.expectedDescriptor as typeof oldDescriptor }).where(eq(boards.id, 'board-a')).run();
+    (f.input.descriptor as typeof nextDescriptor).fields = (f.input.descriptor as typeof nextDescriptor).fields.filter(field => field.key !== 'screenshot');
+    assert.throws(f.plan, /protected field declaration changed/);
+  } finally { f.cleanup(); }
+});
+
+for (const key of ['url', 'screenshot', 'added']) for (const action of ['set', 'unset']) {
+  test(`reserved alias ${key} ${action} remains forbidden even when declared enrichable`, async () => {
+    const f = await fixture();
+    try {
+      const declaration = { key, label: 'Alias', type: 'text', enrichable: true };
+      (f.input.expectedDescriptor as typeof oldDescriptor).fields.push(declaration);
+      (f.input.descriptor as typeof nextDescriptor).fields.push(declaration);
+      f.handle.db.update(boards).set({ descriptor: f.input.expectedDescriptor as typeof oldDescriptor }).where(eq(boards.id, 'board-a')).run();
+      assert.equal(validateDescriptorProposal(f.input.expectedDescriptor).ok, true);
+      assert.equal(validateDescriptorProposal(f.input.descriptor).ok, true);
+      f.input.patches[0].expected.fields[key] = { present: false };
+      if (action === 'set') f.input.patches[0].set[key] = 'forbidden';
+      else f.input.patches[0].unset = [key];
+      assert.throws(f.plan, /unsafe field key/);
+      assert.equal(f.journalExists(), false);
+    } finally { f.cleanup(); }
+  });
+}
+
+test('declaration compatibility never permits hostile keys or system-root shadowing', async () => {
+  const f = await fixture();
+  try {
+    declareAliases(f);
+    for (const key of ['meta.__proto__', 'constructor', 'meta.constructor', 'prototype.child', 'title.child', 'notes.child']) {
+      const input = structuredClone(f.input);
+      (input.descriptor as typeof nextDescriptor).fields.push({ key, label: 'Invalid', type: 'text', enrichable: true });
+      assert.throws(() => planMigration(f.handle, input, f.data), /unsafe field key/);
+    }
+    const input = structuredClone(f.input);
+    input.patches[0].set = JSON.parse('{"__proto__":"forbidden"}');
+    assert.throws(() => planMigration(f.handle, input, f.data), /hostile JSON key/);
+    assert.equal(Object.hasOwn(Object.prototype, 'forbidden'), false);
+  } finally { f.cleanup(); }
+});
+
+test('display declaration compatibility preserves the existing field cap', async () => {
+  const f = await fixture();
+  try {
+    declareAliases(f);
+    const fields = (f.input.descriptor as typeof nextDescriptor).fields;
+    while (fields.length < 24) fields.push({ key: `field_${fields.length}`, label: 'Field', type: 'text', enrichable: true });
+    assert.equal(validateDescriptorProposal(f.input.descriptor).ok, true);
+    assert.ok(f.plan().digest);
+    fields.push({ key: 'one_too_many', label: 'Extra', type: 'text', enrichable: true });
+    assert.equal(validateDescriptorProposal(f.input.descriptor).ok, false);
+    assert.throws(f.plan, /invalid descriptor/);
+  } finally { f.cleanup(); }
+});
+
+test('display declaration compatibility does not relax shared ownership changes', async () => {
+  const f = await fixture();
+  try {
+    declareAliases(f);
+    (f.input.descriptor as typeof nextDescriptor).fields.find(field => field.key === 'url')!.enrichable = true;
+    assert.throws(f.plan, /protected field declaration changed/);
+  } finally { f.cleanup(); }
+});
+
+test('display declaration compatibility does not relax existing field type changes', async () => {
+  const f = await fixture();
+  try {
+    declareAliases(f);
+    (f.input.descriptor as typeof nextDescriptor).fields.find(field => field.key === 'quantity')!.type = 'text';
+    assert.throws(f.plan, /field type or ownership changed/);
   } finally { f.cleanup(); }
 });
