@@ -62,7 +62,7 @@ function assetsByItem(handle: DbHandle): Map<string, Asset[]> {
  * the top level. Also carries url, title, favorite, notes, added, the analysis fields,
  * screenshot, and status (completeness) — mappers read what they need, ignore the rest.
  */
-function toRecord(item: Item, shots: Asset[]): RawRecord {
+export function toRecord(item: Item, shots: Asset[]): RawRecord {
   const rec: RawRecord = {
     id: item.id,
     url: item.source ?? null,
