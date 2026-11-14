@@ -1,5 +1,69 @@
 // Pure collection-UI helpers. No DOM, no window references — importable by node:test.
 import { escHtml } from "./descriptor/render-map.js";
+import { RADIATOR_BOARD_ID, RADIATOR_MODEL_ID, RADIATOR_SCHEMA_VERSION, RADIATOR_PROMPT_VERSION, RADIATOR_ANALYSIS_KEYS, RADIATOR_STAMP_KEYS, isRadiatorReadOnlyField } from "./radiator/contract.js";
+export { isRadiatorReadOnlyField };
+
+function isRadiatorCollection(collection) {
+  return collection?.id === RADIATOR_BOARD_ID && collection.intelligence?.version === 1 && collection.intelligence.modelId === RADIATOR_MODEL_ID;
+}
+
+// Receipt identity plus complete values, never the presence of an intel_v1 prefix alone.
+export function radiatorPresentation(item, collection) {
+  if (!isRadiatorCollection(collection)) return { active: false, descriptor: collection?.descriptor };
+  const receipt = getFieldValue(item, 'radiator_meta.receipt');
+  const active = receipt?.version === 1 && receipt.modelId === RADIATOR_MODEL_ID
+    && receipt.schemaVersion === RADIATOR_SCHEMA_VERSION && receipt.promptVersion === RADIATOR_PROMPT_VERSION
+    && typeof item?.id === 'string' && item.id.length > 0 && receipt.itemId === item.id
+    && receipt.boardId === collection.id
+    && typeof receipt.source === 'string' && !!checkedSourceUrl(receipt.source) && receipt.source === (item?.source ?? item?.url)
+    && typeof receipt.sessionId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(receipt.sessionId)
+    && /^[a-f0-9]{64}$/i.test(receipt.baselineSha256 ?? '')
+    && /^\d{4}-\d{2}-\d{2}$/.test(receipt.reviewedOn ?? '') && Array.isArray(receipt.sources) && receipt.sources.length > 0
+    && RADIATOR_ANALYSIS_KEYS.every(key => typeof getFieldValue(item, key) === 'string' && getFieldValue(item, key).trim().length > 0);
+  const current = collection.descriptor;
+  if (active) return { active: true, receipt, descriptor: current };
+  const legacy = collection.intelligence.legacyDescriptor;
+  // Old generated values stay usable; current user-owned fields stay editable too.
+  const manual = (current?.fields ?? []).filter(f => f.enrichable === false && !isRadiatorReadOnlyField(f.key));
+  const oldFields = legacy?.fields ?? [];
+  const fields = [
+    ...oldFields.map(field => manual.find(f => f.key === field.key) ?? field),
+    ...manual.filter(field => !oldFields.some(f => f.key === field.key)),
+  ];
+  return { active: false, descriptor: { ...legacy, fields } };
+}
+
+export function renderRadiatorState(item, collection) {
+  if (!isRadiatorCollection(collection)) return '';
+  if (collection.intelligence.configurationError === true) return '<div class="card-state" role="status"><span>Analysis configuration needs review. Your saved content is unchanged.</span></div>';
+  const state = getFieldValue(item, 'radiator_meta.state');
+  // Aborted jobs cannot update runner metadata; terminal capture status wins.
+  const status = item?.status === 'error' ? 'error' : state?.version === 1 ? state.status : undefined;
+  const messages = { researching: 'Researching primary sources…', analyzing: 'Analyzing the product…', error: 'Analysis could not finish. Your saved content is unchanged.', disabled: 'Analysis is disabled. Your saved content is available.' };
+  const busy = item?.status === 'pending' || item?.status === 'processing';
+  const message = messages[status] ?? (busy ? (item.queuePosition != null ? 'Product analysis is queued.' : 'Preparing product analysis…') : radiatorPresentation(item, collection).active ? '' : 'No product analysis yet.');
+  if (!message) return '';
+  const retry = status === 'error' || status === 'disabled' || (!busy && !messages[status]);
+  return `<div class="card-state" role="status"><span>${escHtml(message)}</span>${retry ? `<button class="card-retry" data-retry-id="${escHtml(item?.id ?? '')}">Retry analysis</button>` : ''}</div>`;
+}
+
+function checkedSourceUrl(value) {
+  if (typeof value !== 'string' || !/^https?:\/\//i.test(value) || value.trim() !== value) return null;
+  try { const url = new URL(value); return url.protocol === 'https:' || url.protocol === 'http:' ? value : null; } catch { return null; }
+}
+
+export function renderRadiatorProvenance(item, collection) {
+  const view = radiatorPresentation(item, collection);
+  if (!view.active) return '';
+  const r = view.receipt;
+  const stamps = [['Model', r.modelId], ['Session', r.sessionId], ['Reviewed', r.reviewedOn], ['Schema', r.schemaVersion], ['Prompt', r.promptVersion], ['Baseline SHA-256', r.baselineSha256]];
+  const sources = r.sources.map(source => {
+    const url = checkedSourceUrl(source?.url);
+    const label = escHtml(source?.title || source?.url || 'Source');
+    return `<li>${url ? `<a href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label}${source?.retrievedOn ? ` · ${escHtml(source.retrievedOn)}` : ''}</li>`;
+  }).join('');
+  return `<section class="radiator-provenance"><h3 class="field-label">Sources and runner provenance</h3><ul>${sources}</ul><dl>${stamps.map(([label, value]) => `<div><dt class="field-label">${label}</dt><dd class="field-value">${escHtml(value)}</dd></div>`).join('')}</dl></section>`;
+}
 
 export function resolveActiveCollection(storedId, collections) {
   if (!storedId) return "inspiration";
@@ -57,6 +121,7 @@ export function itemFieldEntries(item, descriptor) {
   if (!descriptor || !Array.isArray(descriptor.fields)) return [];
   const out = [];
   for (const field of descriptor.fields) {
+    if (field.key.startsWith('radiator_meta.') || RADIATOR_STAMP_KEYS.includes(field.key)) continue;
     const value = getFieldValue(item, field.key);
     if (!hasValue(value)) continue;
     out.push({ field, value });
@@ -454,7 +519,7 @@ function cardSlotsFrom(fields, item) {
   let shortLead = null;
   const tags = [];
   for (const field of fields) {
-    if (CARD_SKIP_TYPES.has(field.type)) continue;
+    if (CARD_SKIP_TYPES.has(field.type) || field.key.startsWith('radiator_meta.') || RADIATOR_STAMP_KEYS.includes(field.key)) continue;
     const value = getFieldValue(item, field.key);
     if (!hasValue(value)) continue;
     if (field.type === "tags") {
@@ -488,6 +553,13 @@ export function cardSummary(item, descriptor, opts = {}) {
   const empty = { badge: null, lead: null, tags: [] };
   if (!item || !descriptor || !Array.isArray(descriptor.fields)) return empty;
 
+  const view = radiatorPresentation(item, opts.collection);
+  if (view.active) {
+    const slot = key => { const field = descriptor.fields.find(f => f.key === key); return { key, label: field?.label ?? key, value: getFieldValue(item, key) }; };
+    const tags = descriptor.fields.filter(f => f.type === 'tags' && !isRadiatorReadOnlyField(f.key)).flatMap(f => { const v = getFieldValue(item, f.key); return Array.isArray(v) ? v.map(String) : []; });
+    const maxTags = Number.isFinite(opts.maxTags) ? opts.maxTags : DEFAULT_MAX_TAGS;
+    return { badge: slot('intel_v1.relevance'), lead: slot('intel_v1.rationale'), tags: tags.slice(0, maxTags) };
+  }
   const enrichable = descriptor.fields.filter((f) => f.enrichable !== false);
   let slots = cardSlotsFrom(enrichable, item);
   // Nothing AI-filled to show — fall back to the whole descriptor so an all-manual

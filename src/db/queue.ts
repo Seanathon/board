@@ -1,4 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { getSetting } from './settings.js';
+import { RADIATOR_BOARD_ID, RADIATOR_PROFILE_KEY } from '../radiator/contract.js';
 
 import { assets, boards, items, type NewAsset, type NewItem } from './schema.js';
 import { buildSearchBlob } from './search-blob.js';
@@ -246,6 +249,12 @@ export function writeItem(handle: DbHandle, item: NewItem, itemAssets?: NewAsset
  */
 export function writeItemDirect(handle: DbHandle, item: NewItem, itemAssets?: NewAsset[]): void {
   handle.sqlite.transaction(() => {
+    if (getSetting(handle, RADIATOR_PROFILE_KEY) !== undefined) {
+      const previous = handle.db.select().from(items).where(eq(items.id, item.id)).get();
+      if (previous && (previous.boardId === RADIATOR_BOARD_ID || item.boardId === RADIATOR_BOARD_ID) && (previous.boardId !== item.boardId || previous.source !== (item.source ?? null))) {
+        item = { ...item, fields: { ...((item.fields as Record<string, unknown>) ?? {}), 'radiator_meta.generation': randomUUID() } };
+      }
+    }
     const board = handle.db.select().from(boards).where(eq(boards.id, item.boardId)).get();
     const descriptor = (board?.descriptor as BoardDescriptor | undefined) ?? undefined;
     const searchBlob = buildSearchBlob(
@@ -319,6 +328,8 @@ export interface RunItemJobArgs {
   itemId: string;
   type: string;
   timeoutMs: number;
+  /** Optional scoped identity guard; old jobs cannot set status on moved/replaced items. */
+  isCurrent?: () => boolean;
   work: (signal: AbortSignal) => Promise<void> | void;
   teardown?: (signal: AbortSignal) => Promise<void>;
   timeoutFn?: TimeoutFn;
@@ -352,15 +363,16 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
       // Our turn: leave the line, then tell everyone behind us they moved up.
       leaveJobLine(args.itemId);
       publishJobLine(handle);
+      if (args.isCurrent?.() === false) return;
       setItemStatusDirect(handle, args.itemId, 'processing', null);
       try {
         await args.work(signal);
         // If the job already timed out, the timeout path OWNS the terminal status —
         // a late-settling abandoned work must NOT clobber `error` back to `done`.
-        if (signal.aborted) return;
+        if (signal.aborted || args.isCurrent?.() === false) return;
         setItemStatusDirect(handle, args.itemId, 'done', null);
       } catch (err) {
-        if (signal.aborted) return; // timeout already wrote the terminal status
+        if (signal.aborted || args.isCurrent?.() === false) return; // timeout or a changed identity owns status
         if (err instanceof EnrichmentDisabledError) {
           setItemStatusDirect(handle, args.itemId, 'done', null); // disabled = done, not error
         } else {
@@ -383,7 +395,7 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
   // Timeout: the work was abandoned (possibly still `processing`) — record the
   // terminal error status through the writer so the item is never stuck.
   if (result.timedOut) {
-    await enqueueWrite(() => setItemStatusDirect(handle, args.itemId, 'error', 'timed out'));
+    await enqueueWrite(() => { if (args.isCurrent?.() !== false) setItemStatusDirect(handle, args.itemId, 'error', 'timed out'); });
   }
   return result;
 }

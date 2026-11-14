@@ -1,3 +1,4 @@
+import type { RadiatorRuntimeOptions } from '../radiator/runtime.js';
 import cors from "@fastify/cors";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
@@ -38,6 +39,7 @@ export interface V1Options {
   queue: JobQueue;
   logger: Logger;
   llm: LLMProvider;
+  radiator?: RadiatorRuntimeOptions;
   screenshotsDir: string;
   /**
    * Story 16.2 — injectable archival snapshot enqueue (tests spy so no Chrome runs).
@@ -153,6 +155,7 @@ export async function registerV1Api(app: FastifyInstance, opts: V1Options): Prom
           queue: opts.queue,
           logger: opts.logger,
           llm: opts.llm,
+          radiator: opts.radiator,
           boardId,
         });
         try {
@@ -256,6 +259,7 @@ export async function registerV1Api(app: FastifyInstance, opts: V1Options): Prom
             itemIds,
             boardId,
             llm: opts.llm,
+          radiator: opts.radiator,
             registry: captureRegistry,
             enqueueSnapshot, // Story 16.2 — opt-in archival fires here iff the target board is flagged
           });

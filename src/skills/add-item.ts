@@ -1,3 +1,4 @@
+import { isRadiatorMetadataKey } from '../radiator/contract.js';
 import { randomUUID } from 'node:crypto';
 
 import { eq } from 'drizzle-orm';
@@ -47,7 +48,7 @@ export const addItemSkill = defineSkill(
       id: itemId,
       boardId: input.boardId,
       source: input.source ?? null,
-      fields: input.fields ?? {},
+      fields: Object.fromEntries(Object.entries(input.fields ?? {}).filter(([key]) => !isRadiatorMetadataKey(key))),
       status: 'pending',
     });
 
@@ -67,6 +68,7 @@ export const addItemSkill = defineSkill(
         source: input.source,
         ingestMode,
         llm: ctx.llm,
+        radiator: ctx.radiator,
         registry: captureRegistry,
         screenshotsDir: config.screenshotsDir,
         // Story 13.1 — Inbox capture is cheap (no AI takeaway); every other board

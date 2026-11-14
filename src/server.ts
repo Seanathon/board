@@ -1,3 +1,5 @@
+import { getRadiatorProfile, assertActiveDescriptor, radiatorPublicConfiguration } from './radiator/profile.js';
+import type { RadiatorRuntimeOptions } from './radiator/runtime.js';
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyReply } from "fastify";
 import fs from "node:fs";
@@ -293,6 +295,7 @@ async function handleScreenshot(
 // --- Server factory ---
 
 export interface BuildServerOptions {
+  radiator?: RadiatorRuntimeOptions;
   screenshotsDir?: string;
   /** Story 16.3 — snapshots dir for the archive footprint route; defaults to config. */
   snapshotsDir?: string;
@@ -355,6 +358,8 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     sendJs(reply, path.join(__dirname, "collections-ui.js")));
   app.get("/descriptor/render-map.js", async (_req, reply) =>
     sendJs(reply, path.join(__dirname, "descriptor", "render-map.js")));
+
+  app.get("/radiator/contract.js", async (_req, reply) => sendJs(reply, path.join(__dirname, "radiator", "contract.js")));
 
   // Screenshots now live OUTSIDE __dirname (under DATA_DIR), so the static root no
   // longer serves them. Stream them from screenshotsDir at the /screenshots/ prefix
@@ -439,7 +444,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
           await pipeline(req.body as NodeJS.ReadableStream, fs.createWriteStream(tmpTar));
           const { document, filesRestored } = await extractArchive(tmpTar, screenshotsDir);
           const handle = opts.db ?? getDb();
-          const ctx = buildCtx({ db: handle, queue, logger, llm });
+          const ctx = buildCtx({ radiator: opts.radiator, db: handle, queue, logger, llm });
           const result = await importDocumentSkill.run({ document }, ctx);
           return { ...result, filesRestored };
         } catch (err) {
@@ -506,6 +511,8 @@ export async function buildServer(opts: BuildServerOptions = {}) {
         // alone only checks closed types, which would let the editor create a `notes`/
         // `title` field that collides with a system column. Then persist (single-writer).
         if (hasDescriptor) {
+          const profile = getRadiatorProfile(handle, req.params.id);
+          if (profile) assertActiveDescriptor(profile, req.body!.descriptor);
           const check = validateDescriptorProposal(req.body!.descriptor, {});
           if (!check.ok) {
             reply.status(400);
@@ -524,6 +531,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
         if (hasName) {
           const name = (req.body!.name ?? "").trim();
           if (!name) { reply.status(400); return { error: "name is required" }; }
+          if (getRadiatorProfile(handle, req.params.id) && name !== "Radiator") { reply.status(400); return { error: "Activated Radiator target name is protected" }; }
           await renameBoard(handle, req.params.id, name);
         }
         const b = handle.db.select().from(boardsTable).where(eq(boardsTable.id, req.params.id)).get();
@@ -553,7 +561,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     const handle = opts.db ?? getDb();
     const board = handle.db.select().from(boardsTable).where(eq(boardsTable.id, req.params.id)).get();
     if (!board) { reply.status(404); return { error: "Not found" }; }
-    const { queued } = reenrichBoardItems(handle, { boardId: req.params.id, llm, registry: captureRegistry });
+    const { queued } = reenrichBoardItems(handle, { boardId: req.params.id, llm, radiator: opts.radiator, registry: captureRegistry });
     return { queued };
   });
 
@@ -671,7 +679,7 @@ t.addEventListener('input',upd);upd();
         }
         try {
           const handle = opts.db ?? getDb();
-          const ctx = buildCtx({ db: handle, queue, logger, llm, boardId: INBOX_BOARD_ID });
+          const ctx = buildCtx({ radiator: opts.radiator, db: handle, queue, logger, llm, boardId: INBOX_BOARD_ID });
           await addItemSkill.run({ boardId: INBOX_BOARD_ID, source: url }, ctx);
         } catch (err) {
           logger.error?.(`[share] capture failed: ${(err as Error).message}`);
@@ -699,6 +707,7 @@ t.addEventListener('input',upd);upd();
         : b.id === LIBRARY_BOARD_ID ? "library"
         : b.view === "grid" ? "inspiration" : "library",
       descriptor: b.descriptor,
+      ...(radiatorPublicConfiguration(handle, b.id) ? { intelligence: radiatorPublicConfiguration(handle, b.id) } : {}),
     }));
   });
 
@@ -725,7 +734,7 @@ t.addEventListener('input',upd);upd();
       const url = (req.body?.url ?? "").trim();
       if (!url) { reply.status(400); return { error: "url is required" }; } // before getDb (no pollution)
       const handle = opts.db ?? getDb();
-      const ctx = buildCtx({ db: handle, queue, logger, llm, boardId: req.params.cid });
+      const ctx = buildCtx({ radiator: opts.radiator, db: handle, queue, logger, llm, boardId: req.params.cid });
       try {
         // add-item creates the pending item + (fire-and-forget) enqueues capture+enrich.
         const { itemId } = await addItemSkill.run({ boardId: req.params.cid, source: url }, ctx);
@@ -779,6 +788,7 @@ t.addEventListener('input',upd);upd();
           itemIds: [req.params.id],
           boardId,
           llm,
+          radiator: opts.radiator,
           registry: captureRegistry,
           enqueueSnapshot: opts.enqueueSnapshot, // archives-on-promote boards snapshot the moved item
         });
@@ -797,7 +807,7 @@ t.addEventListener('input',upd);upd();
       const handle = opts.db ?? getDb();
       // Fire-and-forget refetch (capture+enrich); SSE drives the live update. Guarded
       // so an unknown-item rejection can't crash the worker (Story 7.3 review).
-      void refetchItem(handle, { itemId: req.params.id, registry: captureRegistry, llm, screenshotsDir })
+      void refetchItem(handle, { itemId: req.params.id, registry: captureRegistry, llm, screenshotsDir, radiator: opts.radiator })
         .catch((e) => logger.error(`refetch "${req.params.id}" failed to start: ${(e as Error).message}`));
       return getItemForUi(handle, req.params.id) ?? { id: req.params.id, status: "processing" };
     }
@@ -875,7 +885,7 @@ t.addEventListener('input',upd);upd();
           ? (req.body as { boardId?: unknown }).boardId
           : undefined;
       const boardId = typeof rawBoardId === "string" && rawBoardId.length > 0 ? rawBoardId : undefined;
-      const ctx = buildCtx({ db: opts.db ?? getDb(), queue, logger, llm, boardId });
+      const ctx = buildCtx({ radiator: opts.radiator, db: opts.db ?? getDb(), queue, logger, llm, boardId });
 
       let result: unknown;
       try {
@@ -922,6 +932,7 @@ t.addEventListener('input',upd);upd();
     llm,
     screenshotsDir,
     enqueueSnapshot: opts.enqueueSnapshot,
+    radiator: opts.radiator,
   });
 
   return app;

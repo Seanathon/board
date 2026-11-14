@@ -1,4 +1,7 @@
 import { z, type ZodType } from 'zod';
+import { generationOf, isRadiatorMetadataKey } from '../radiator/contract.js';
+import { isRadiatorBoardActive } from '../radiator/profile.js';
+import { runRadiatorEnrichment, type RadiatorRuntimeOptions } from '../radiator/runtime.js';
 
 import { eq } from 'drizzle-orm';
 
@@ -87,10 +90,11 @@ ${capturedText}`;
  */
 export async function runEnrichmentForItem(
   handle: DbHandle,
-  args: { itemId: string; llm: LLMProvider; signal?: AbortSignal },
+  args: { itemId: string; llm: LLMProvider; signal?: AbortSignal; radiator?: RadiatorRuntimeOptions },
 ): Promise<void> {
   const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
   if (!item) throw new Error(`Cannot enrich: unknown item "${args.itemId}"`);
+  if (isRadiatorBoardActive(handle, item.boardId)) return runRadiatorEnrichment(handle, args);
   const board = handle.db.select().from(boards).where(eq(boards.id, item.boardId)).get();
   const descriptor = board?.descriptor as BoardDescriptor | undefined;
   if (!descriptor) throw new Error(`Cannot enrich: board "${item.boardId}" has no descriptor`);
@@ -117,7 +121,7 @@ export async function runEnrichmentForItem(
       if (typeof v === 'string' && v.trim().length > 0) refinedTitle = v.trim();
       continue;
     }
-    if (allowedKeys.has(k) && v !== undefined) enriched[k] = v;
+    if (allowedKeys.has(k) && !isRadiatorMetadataKey(k) && v !== undefined) enriched[k] = v;
   }
   const titleUpdate = refinedTitle !== undefined ? { title: refinedTitle } : {};
   // Re-read the row INSIDE the write op — no await between the read and the write — so
@@ -127,7 +131,8 @@ export async function runEnrichmentForItem(
   // revert it. Enqueued rather than direct: jobs and writes are separate lanes now, so
   // a write from inside a job no longer self-deadlocks.
   await enqueueWrite(() => {
-    const fresh = handle.db.select().from(items).where(eq(items.id, args.itemId)).get() ?? item;
+    const fresh = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
+    if (args.signal?.aborted || !fresh || fresh.boardId !== item.boardId || fresh.source !== item.source || generationOf(fresh) !== generationOf(item)) return;
     writeItemDirect(handle, {
       ...fresh,
       ...titleUpdate,

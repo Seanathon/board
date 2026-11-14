@@ -2177,6 +2177,8 @@
       transition: opacity 0.3s;
     }
     .save-status.visible { opacity: 1; }
+    .radiator-provenance { margin-top: 20px; overflow-wrap: anywhere; }
+    .radiator-provenance dd { margin: 0 0 12px; }
   </style>
 </head>
 <body>
@@ -2623,6 +2625,13 @@ LLM_API_KEY=sk-…</pre>
       if (event.queuePosition != null) item.queuePosition = event.queuePosition;
       else delete item.queuePosition;
       if (event.fields && typeof event.fields === 'object') {
+        if (item.fields) item.fields = { ...item.fields, ...event.fields };
+        // A successful receipt replaces the runner state; omission is a deletion,
+        // not permission to keep showing a previous researching/error message.
+        if (event.status === 'done' && event.fields['radiator_meta.receipt'] && !event.fields['radiator_meta.state']) {
+          if (item.fields) delete item.fields['radiator_meta.state'];
+          if (item.radiator_meta) delete item.radiator_meta.state;
+        }
         // `fields` arrives flat and dotted ("meta.tier"); the renderers read it nested.
         for (const [key, value] of Object.entries(event.fields)) {
           const dot = key.indexOf('.');
@@ -3181,8 +3190,9 @@ LLM_API_KEY=sk-…</pre>
   // would orphan stored item.fields data); new fields get an editable key.
   function boardFieldRowHtml(field, isExisting) {
     const f = field || { key: '', label: '', type: 'text', enrichable: true, description: '', values: [] };
+    const runnerOwned = window.collectionHelpers?.isRadiatorReadOnlyField(f.key) && (f.key.startsWith('intel_v1.') || f.key.startsWith('radiator_meta.'));
     const typeOpts = BOARD_FIELD_TYPES.map(t => `<option value="${t}"${f.type === t ? ' selected' : ''}>${t}</option>`).join('');
-    return `<div class="board-field-edit">
+    return `<fieldset class="board-field-edit"${runnerOwned ? ' disabled title="Runner-owned provenance"' : ''} style="border:0;padding:0;margin:0;min-width:0">
       <div class="bf-grid">
         <input class="bf-label reflection-input" value="${esc(f.label || '')}" placeholder="Label">
         <input class="bf-key reflection-input bf-key-input" value="${esc(f.key || '')}" placeholder="key" ${isExisting ? 'readonly title="key is fixed for existing fields"' : ''}>
@@ -3192,7 +3202,7 @@ LLM_API_KEY=sk-…</pre>
         <input class="bf-desc reflection-input" style="grid-column:1 / 4" value="${esc(f.description || '')}" placeholder="Description / AI hint (what goes in this field)">
         <input class="bf-values reflection-input" style="grid-column:4 / 6;${f.type === 'enum' ? '' : 'display:none'}" value="${esc((f.values || []).join(', '))}" placeholder="enum values (comma-separated)">
       </div>
-    </div>`;
+    </fieldset>`;
   }
 
   function wireBoardFieldRow(row) {
@@ -3293,7 +3303,7 @@ LLM_API_KEY=sk-…</pre>
     document.getElementById('edit-board-delete-yes').onclick = () => deleteBoard(boardId);
   }
 
-  function collectBoardDescriptor() {
+  function collectBoardDescriptor(boardId) {
     const fields = [...document.querySelectorAll('#board-fields-container .board-field-edit')].map(row => {
       const label = row.querySelector('.bf-label').value.trim();
       let key = row.querySelector('.bf-key').value.trim();
@@ -3306,6 +3316,7 @@ LLM_API_KEY=sk-…</pre>
       return f;
     }).filter(f => f.key && f.label);
     return {
+      ...(collections.find(c => c.id === boardId)?.descriptor || {}),
       fields,
       enrichment_prompt: document.getElementById('edit-board-prompt').value,
       view: document.getElementById('edit-board-view').value,
@@ -3317,7 +3328,7 @@ LLM_API_KEY=sk-…</pre>
     const name = document.getElementById('edit-board-name').value.trim();
     const status = document.getElementById('edit-board-status');
     if (!name) { status.textContent = 'Name is required'; return; }
-    const descriptor = collectBoardDescriptor();
+    const descriptor = collectBoardDescriptor(boardId);
     status.textContent = 'Saving…';
     try {
       const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}`, {
@@ -3688,7 +3699,12 @@ LLM_API_KEY=sk-…</pre>
     return `Queued, ${ORDINALS[pos] || pos + 'th'} in line`;
   }
 
-  function stateOf(b) { return window.collectionHelpers.itemRenderState(b); }
+  function stateOf(b) {
+    const col = collections.find(c => c.id === activeCollection);
+    // Radiator renders its own analysis state alongside saved content, never over it.
+    if (col?.id === 'radiator-9k51' && col.intelligence?.version === 1) return 'ready';
+    return window.collectionHelpers.itemRenderState(b);
+  }
 
   /** A ghost line at a given width; the stagger makes the card breathe as a unit. */
   function ghostBar(width, delay = 0) {
@@ -3741,7 +3757,16 @@ LLM_API_KEY=sk-…</pre>
   async function retryItem(id, btn) {
     if (btn) { btn.disabled = true; btn.textContent = 'Retrying…'; }
     const item = bookmarks.find(b => b.id === id);
-    if (item) { item.status = 'processing'; delete item.error_reason; applyFilters(); }
+    if (item) {
+      item.status = 'processing';
+      delete item.error_reason;
+      const col = collections.find(c => c.id === activeCollection);
+      if (col?.id === 'radiator-9k51' && col.intelligence?.version === 1) {
+        if (item.fields) delete item.fields['radiator_meta.state'];
+        if (item.radiator_meta) delete item.radiator_meta.state;
+      }
+      applyFilters();
+    }
     try {
       const res = await fetch(window.collectionHelpers.refetchUrl(activeCollection, id), { method: 'POST' });
       if (!res.ok) throw new Error('refetch failed');
@@ -3941,7 +3966,8 @@ LLM_API_KEY=sk-…</pre>
 
   function summaryOf(b, col) {
     const ch = window.collectionHelpers;
-    return ch?.cardSummary ? ch.cardSummary(b, col?.descriptor) : { badge: null, lead: null, tags: [] };
+    const view = ch?.radiatorPresentation?.(b, col);
+    return ch?.cardSummary ? ch.cardSummary(b, view?.descriptor ?? col?.descriptor, { collection: col }) : { badge: null, lead: null, tags: [] };
   }
 
   /**
@@ -3956,7 +3982,7 @@ LLM_API_KEY=sk-…</pre>
     const tags = s.tags.length
       ? `<div class="${tagsClass}">${s.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>`
       : '';
-    return lead + tags;
+    return lead + tags + (window.collectionHelpers.renderRadiatorState?.(b, col) || '');
   }
 
   function renderDescriptorGrid(col) {
@@ -4093,15 +4119,17 @@ LLM_API_KEY=sk-…</pre>
     if (!item) return;
     currentBookmark = item;
     modalLastFocused = document.activeElement;
-    const descriptor = (collections.find(c => c.id === activeCollection) || {}).descriptor;
+    const col = collections.find(c => c.id === activeCollection);
     const rh = window.renderHelpers || {};
     const ch = window.collectionHelpers || {};
+    const radiator = ch.radiatorPresentation?.(item, col);
+    const descriptor = radiator?.descriptor ?? col?.descriptor;
     const entries = (descriptor && ch.itemFieldEntries) ? ch.itemFieldEntries(item, descriptor) : [];
 
     // Editable = your (enrichable:false) fields — taken from the DESCRIPTOR so EMPTY
     // ones still render an input to fill (itemFieldEntries drops empties, which is right
     // for read-only AI fields but would hide a blank "my rating" you want to set).
-    const editableFields = ((descriptor && descriptor.fields) || []).filter(f => f.enrichable === false && MODAL_EDITABLE_TYPES.has(f.type));
+    const editableFields = ((descriptor && descriptor.fields) || []).filter(f => f.enrichable === false && MODAL_EDITABLE_TYPES.has(f.type) && !(col?.intelligence?.version === 1 && ch.isRadiatorReadOnlyField?.(f.key)));
     const editableKeys = new Set(editableFields.map(f => f.key));
 
     // Read-only display fields (AI-filled, non-empty) — excluding the editable ones.
@@ -4113,10 +4141,10 @@ LLM_API_KEY=sk-…</pre>
       displayEntries.push(e);
     }
     // Lead = first longish read-only text field (the "Steal This"/"Summary" highlight).
-    let lead = displayEntries.find(e => e.field.type === 'text' && typeof e.value === 'string' && e.value.length > 50) || null;
+    let lead = (radiator?.active ? displayEntries.find(e => e.field.key === 'intel_v1.rationale') : displayEntries.find(e => e.field.type === 'text' && typeof e.value === 'string' && e.value.length > 50)) || null;
     const restDisplay = displayEntries.filter(e => e !== lead && modalHasVal(e.value));
 
-    const tierEntry = entries.find(e => /(^|\.)tier$/.test(e.field.key));
+    const tierEntry = entries.find(e => radiator?.active ? e.field.key === 'intel_v1.relevance' : /(^|\.)tier$/.test(e.field.key));
     const tierBadge = tierEntry && modalHasVal(tierEntry.value) ? `<span class="tier-badge ${esc(String(tierEntry.value))}">${esc(String(tierEntry.value))}</span>` : '';
 
     const allTags = tagsEntries.flatMap(e => Array.isArray(e.value) ? e.value : (modalHasVal(e.value) ? [e.value] : []));
@@ -4169,9 +4197,11 @@ LLM_API_KEY=sk-…</pre>
         </div>
         ${item.url ? `<div class="modal-url">${urlSafe ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.url)}</a>` : `<span>${esc(item.url)}</span>`}${item.added ? ` · ${esc(item.added)}` : ''}</div>` : ''}
         ${tagsHtml}
+        ${ch.renderRadiatorState?.(item, col) || ''}
         ${modalState !== 'ready' ? `<div style="margin:12px 0">${stateNote(item, modalState)}</div>` : ''}
         ${lead ? `<div class="steal-this"><div class="field-label">${esc(lead.field.label)}</div><div class="field-value">${esc(String(lead.value))}</div></div>` : ''}
         ${displayHtml}
+        ${ch.renderRadiatorProvenance?.(item, col) || ''}
         ${editSection}
         <div class="modal-footer">
           <span class="save-status" id="save-status"></span>
@@ -4201,6 +4231,8 @@ LLM_API_KEY=sk-…</pre>
     const patch = {};
     document.querySelectorAll('#modal-content [data-edit-key]').forEach(el => {
       const key = el.dataset.editKey, type = el.dataset.editType;
+      const col = collections.find(c => c.id === activeCollection);
+      if (col?.intelligence?.version === 1 && window.collectionHelpers.isRadiatorReadOnlyField?.(key)) return;
       let v = el.value;
       if (type === 'tags') v = v.split(',').map(s => s.trim()).filter(Boolean);
       else if (type === 'number') v = v === '' ? null : Number(v);
@@ -5327,8 +5359,8 @@ LLM_API_KEY=sk-…</pre>
   // load() is called by the module script below after collectionHelpers are initialized
 </script>
 <script type="module">
-  import { cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
-  window.collectionHelpers = { cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
+  import { radiatorPresentation, renderRadiatorState, renderRadiatorProvenance, isRadiatorReadOnlyField, cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
+  window.collectionHelpers = { radiatorPresentation, renderRadiatorState, renderRadiatorProvenance, isRadiatorReadOnlyField, cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
   // Story 7.2: generic descriptor-driven field renderer (Epic 8 wires it into the
   // descriptor-driven card/modal when the UI consumes the SQLite item model).
   import { renderField, renderFields, renderAsset, isSafeUrl } from './descriptor/render-map.js';

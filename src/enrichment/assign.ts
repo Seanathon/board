@@ -1,7 +1,9 @@
+import { isRadiatorBoardActive } from '../radiator/profile.js';
+import type { RadiatorRuntimeOptions } from '../radiator/runtime.js';
 import { eq } from 'drizzle-orm';
 
 import { boards, items } from '../db/schema.js';
-import { writeItem, type TimeoutFn } from '../db/queue.js';
+import { enqueueWrite, writeItemDirect, writeItem, type TimeoutFn } from '../db/queue.js';
 import { runCaptureEnrichJob } from './pipeline.js';
 import { runSnapshotJob } from '../capture/url-snapshot.js';
 import { archivesOnPromote, type BoardDescriptor } from '../descriptor/types.js';
@@ -28,6 +30,7 @@ export interface AssignArgs {
   llm: LLMProvider;
   registry: CaptureRegistry;
   timeoutFn?: TimeoutFn;
+  radiator?: RadiatorRuntimeOptions;
   /**
    * Story 16.2 — injectable archival enqueue (tests pass a spy so no Chrome runs).
    * Called once per moved item ONLY when the target board archives-on-promote. Default:
@@ -78,7 +81,13 @@ export async function assignItems(handle: DbHandle, args: AssignArgs): Promise<A
     try {
       // single-FK move via the typed write: search_blob recomputed against the TARGET
       // descriptor; `fields`/assets untouched (no itemAssets arg).
-      await writeItem(handle, { ...item, boardId: args.boardId, updatedAt: Math.floor(Date.now() / 1000) });
+      if (isRadiatorBoardActive(handle, item.boardId) || isRadiatorBoardActive(handle, args.boardId)) {
+        await enqueueWrite(() => {
+          const fresh = handle.db.select().from(items).where(eq(items.id, id)).get();
+          if (!fresh) throw new Error('Item deleted during assignment');
+          writeItemDirect(handle, { ...fresh, boardId: args.boardId, updatedAt: Math.floor(Date.now() / 1000) });
+        });
+      } else await writeItem(handle, { ...item, boardId: args.boardId, updatedAt: Math.floor(Date.now() / 1000) });
       assigned.push(id);
       sources.set(id, item.source ?? null);
     } catch {
@@ -99,6 +108,7 @@ export async function assignItems(handle: DbHandle, args: AssignArgs): Promise<A
       source: undefined,
       tier: 'earned',
       llm: args.llm,
+      radiator: args.radiator,
       registry: args.registry,
       timeoutFn: args.timeoutFn,
     }).catch((e) => e),

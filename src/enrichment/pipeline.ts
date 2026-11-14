@@ -1,9 +1,14 @@
+import assert from 'node:assert/strict';
 import { runItemJob, type JobResult, type TimeoutFn } from '../db/queue.js';
 import { runCaptureForItem, type CaptureRegistry, type CaptureSource } from '../capture/adapter.js';
 import { runEnrichmentForItem } from './worker.js';
 import type { LLMProvider } from '../skills/types.js';
 import type { DbHandle } from '../db/index.js';
 import { config } from '../config.js';
+import { eq } from 'drizzle-orm';
+import { items } from '../db/schema.js';
+import { isRadiatorBoardActive } from '../radiator/profile.js';
+import { assertRadiatorIdentity, type RadiatorRuntimeOptions } from '../radiator/runtime.js';
 
 // Story 7.1/7.3 — the shared capture→enrich pipeline as ONE worker job, so the item
 // holds a single `processing` state until enriched (Story 5.3 contract). Used by
@@ -36,6 +41,7 @@ export interface CaptureEnrichArgs {
    * generalizes this tier selection.
    */
   tier?: 'cheap' | 'earned';
+  radiator?: RadiatorRuntimeOptions;
 }
 
 /**
@@ -44,6 +50,9 @@ export interface CaptureEnrichArgs {
  * Capture's browser teardown is awaited by the worker before the next capture (6.5).
  */
 export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): Promise<JobResult> {
+  const identityBefore = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
+  const radiatorBefore = isRadiatorBoardActive(handle, args.boardId) ? identityBefore : undefined;
+  let radiatorWork: Promise<void> | undefined;
   let captureTeardown: (() => Promise<void>) | undefined;
   const canCapture =
     !!args.source &&
@@ -56,7 +65,12 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
     type: 'capture',
     timeoutMs: args.timeoutMs ?? config.captureTimeoutMs,
     timeoutFn: args.timeoutFn,
+    isCurrent: identityBefore ? () => { try { assertRadiatorIdentity(handle, identityBefore); return identityBefore.boardId === args.boardId; } catch { return false; } } : undefined,
     work: async (signal) => {
+      const work = async () => {
+      const assertCurrent = identityBefore ? () => { assertRadiatorIdentity(handle, identityBefore, signal); } : undefined;
+      assertCurrent?.();
+      if (radiatorBefore && typeof args.source === 'string') assert(args.source === radiatorBefore.source, 'Radiator capture source changed');
       if (canCapture) {
         await runCaptureForItem(handle, args.registry, {
           itemId: args.itemId,
@@ -65,14 +79,26 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
           signal,
           screenshotsDir: args.screenshotsDir,
           registerTeardown: (fn) => { captureTeardown = fn; },
+          assertCurrent,
         });
       }
       // Cheap tier (Inbox): skip the enrich hop entirely so llm.complete is never
       // reached — the AI takeaway is earned on assignment (Epic 14), not on capture.
+      assertCurrent?.();
       if (args.tier !== 'cheap') {
-        await runEnrichmentForItem(handle, { itemId: args.itemId, llm: args.llm, signal });
+        await runEnrichmentForItem(handle, { itemId: args.itemId, llm: args.llm, signal, radiator: args.radiator });
       }
+      };
+      const running = work();
+      if (radiatorBefore) radiatorWork = running.then(() => {}, () => {});
+      await running;
     },
-    teardown: async () => { if (captureTeardown) await captureTeardown(); },
+    teardown: async () => {
+      if (captureTeardown) await captureTeardown();
+      if (radiatorWork) await new Promise<void>(resolve => {
+        const timer = setTimeout(resolve, 1000);
+        void radiatorWork!.then(() => { clearTimeout(timer); resolve(); });
+      });
+    },
   });
 }

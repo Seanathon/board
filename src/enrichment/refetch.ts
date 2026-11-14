@@ -1,6 +1,8 @@
+import { isRadiatorBoardActive } from '../radiator/profile.js';
+import type { RadiatorRuntimeOptions } from '../radiator/runtime.js';
 import { eq } from 'drizzle-orm';
 
-import { boards, items } from '../db/schema.js';
+import { assets, boards, items } from '../db/schema.js';
 import { runCaptureEnrichJob } from './pipeline.js';
 import type { CaptureRegistry } from '../capture/adapter.js';
 import type { BoardDescriptor } from '../descriptor/types.js';
@@ -16,7 +18,7 @@ import type { DbHandle } from '../db/index.js';
 // This is also the "Retry analysis" path for a status=error item (Story 8.5).
 export async function refetchItem(
   handle: DbHandle,
-  args: { itemId: string; registry: CaptureRegistry; llm: LLMProvider; screenshotsDir?: string; timeoutFn?: TimeoutFn },
+  args: { itemId: string; registry: CaptureRegistry; llm: LLMProvider; screenshotsDir?: string; timeoutFn?: TimeoutFn; radiator?: RadiatorRuntimeOptions },
 ): Promise<JobResult> {
   const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
   if (!item) throw new Error(`Cannot refetch: unknown item "${args.itemId}"`);
@@ -26,9 +28,10 @@ export async function refetchItem(
   return runCaptureEnrichJob(handle, {
     itemId: item.id,
     boardId: item.boardId,
-    source: item.source ?? undefined,
+    source: isRadiatorBoardActive(handle, item.boardId) && (handle.db.select().from(assets).where(eq(assets.itemId, item.id)).get() || (item.fields as Record<string, unknown> | null)?.text) ? undefined : item.source ?? undefined,
     ingestMode,
     llm: args.llm,
+      radiator: args.radiator,
     registry: args.registry,
     screenshotsDir: args.screenshotsDir,
     timeoutFn: args.timeoutFn,
@@ -45,7 +48,7 @@ export async function refetchItem(
  */
 export function reenrichBoardItems(
   handle: DbHandle,
-  args: { boardId: string; llm: LLMProvider; registry: CaptureRegistry; timeoutFn?: TimeoutFn },
+  args: { boardId: string; llm: LLMProvider; registry: CaptureRegistry; timeoutFn?: TimeoutFn; radiator?: RadiatorRuntimeOptions },
 ): { queued: number; settled: Promise<unknown> } {
   const rows = handle.db.select().from(items).where(eq(items.boardId, args.boardId)).all();
   const jobs = rows.map((it) =>
@@ -54,6 +57,7 @@ export function reenrichBoardItems(
       boardId: it.boardId,
       source: undefined, // enrich-only (no re-capture)
       llm: args.llm,
+      radiator: args.radiator,
       registry: args.registry,
       timeoutFn: args.timeoutFn,
     }).catch((e) => e), // per-item failure is recorded as status=error by the job

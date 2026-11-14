@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 
 import { assets, items, type Item, type Asset } from './schema.js';
+import { RADIATOR_BOARD_ID } from '../radiator/contract.js';
 import { jobLinePositionOf } from './queue.js';
 import type { DbHandle } from './index.js';
 
@@ -35,6 +36,7 @@ export function hydrateItemForUi(item: Item, itemAssets: Asset[] = []): Record<s
 
   const fields = (item.fields as Record<string, unknown>) ?? {};
   for (const [key, value] of Object.entries(fields)) {
+    if (key === 'radiator_meta') continue; // only flat runner-owned metadata can form this trusted group
     const dot = key.indexOf('.');
     if (dot > 0) {
       const group = key.slice(0, dot);
@@ -46,6 +48,7 @@ export function hydrateItemForUi(item: Item, itemAssets: Asset[] = []): Record<s
       out[key] = value;
     }
   }
+  if (item.boardId === RADIATOR_BOARD_ID) out.url = item.source ?? ''; // captured field aliases cannot shadow canonical identity
   return out;
 }
 

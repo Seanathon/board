@@ -1,5 +1,6 @@
 import type { z, ZodType } from 'zod';
 
+import type { RadiatorRuntimeOptions } from '../radiator/runtime.js';
 import type { DbHandle } from '../db/index.js';
 
 // Story 3.1 — the Skill contract, the injected Ctx, and the LLMProvider seam.
@@ -63,6 +64,7 @@ export interface Ctx {
   logger: Logger;
   /** The board a skill operates on, when scoped (matches §5 item.board_id). */
   boardId?: string;
+  radiator?: RadiatorRuntimeOptions;
 }
 
 export interface Skill<I, O> {
@@ -96,6 +98,7 @@ export function buildCtx(args: {
   logger: Logger;
   llm?: LLMProvider;
   boardId?: string;
+  radiator?: RadiatorRuntimeOptions;
 }): Ctx {
   return {
     db: args.db,
@@ -103,5 +106,6 @@ export function buildCtx(args: {
     logger: args.logger,
     llm: args.llm ?? disabledLlm,
     boardId: args.boardId,
+    ...(args.radiator ? { radiator: args.radiator } : {}),
   };
 }

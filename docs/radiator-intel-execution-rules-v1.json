@@ -1,0 +1,8 @@
+{
+  "version": "radiator-intel-execution/1",
+  "rules": [
+    "Taxonomy rule: direct-competitor means a credible alternative for the named user/job, including Radiator's initial engineering use case. A narrower engineering product can compete directly; do NOT label it merely adjacent solely because Radiator's decided aspirations span more departments. Adjacent is a neighboring job without evidence of substitution; enabler supplies a capability behind an integration boundary. State the chosen comparison job explicitly.",
+    "Product-boundary rule: the saved URL identifies the subject/variant. A first-party pricing page for another product, edition or audience does not establish pricing for this subject. Explicitly mark scope mismatch and unknown commercial terms rather than generalizing across a vendor suite. For frameworks/infrastructure, classify as enabler when the implication is a plausible component behind Radiator ports; do not invent an integration.",
+    "Source-link rule: only supplied source records are inspected evidence. Links listed inside a documentation index are unvisited, not additional sources. Do not imply you read them or emit unprovided URLs. If only an index/partial page is available, state coverage limits and mark unsupported product, control, recovery and pricing dimensions unknown."
+  ]
+}

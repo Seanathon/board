@@ -4,7 +4,9 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 
 import { assets, boards, items, type Item } from './schema.js';
-import { writeItem, deleteItem } from './queue.js';
+import { isRadiatorBoardActive } from '../radiator/profile.js';
+import { isRadiatorReadOnlyField, isRadiatorMetadataKey } from '../radiator/contract.js';
+import { enqueueWrite, writeItemDirect, writeItem, deleteItem } from './queue.js';
 import type { BoardDescriptor } from '../descriptor/types.js';
 import type { DbHandle } from './index.js';
 
@@ -32,7 +34,7 @@ export async function patchItemFields(
   const board = handle.db.select().from(boards).where(eq(boards.id, item.boardId)).get();
   const descriptor = board?.descriptor as BoardDescriptor | undefined;
   const allowedFieldKeys = new Set(
-    (descriptor?.fields ?? []).filter((f) => f.enrichable === false).map((f) => f.key),
+    (descriptor?.fields ?? []).filter((f) => f.enrichable === false && !isRadiatorMetadataKey(f.key) && (!isRadiatorBoardActive(handle, item.boardId) || !isRadiatorReadOnlyField(f.key))).map((f) => f.key),
   );
 
   const columnUpdates: Record<string, unknown> = {};
@@ -46,6 +48,12 @@ export async function patchItemFields(
     // else: disallowed (status / enriched / unknown) → silently ignored.
   }
 
+  if (isRadiatorBoardActive(handle, item.boardId)) return enqueueWrite(() => {
+    const fresh = handle.db.select().from(items).where(eq(items.id, itemId)).get();
+    if (!fresh || fresh.boardId !== item.boardId) return undefined;
+    writeItemDirect(handle, { ...fresh, ...columnUpdates, updatedAt: Math.floor(Date.now() / 1000), fields: { ...((fresh.fields as Record<string, unknown>) ?? {}), ...fieldUpdates } });
+    return handle.db.select().from(items).where(eq(items.id, itemId)).get();
+  });
   const fields = { ...((item.fields as Record<string, unknown>) ?? {}), ...fieldUpdates };
   // Bump updatedAt (seconds, matching the unixepoch() DB default) so a future
   // "recently edited" sort sees curation edits.

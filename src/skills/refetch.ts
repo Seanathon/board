@@ -21,6 +21,7 @@ export const refetchSkill = defineSkill(
       itemId: input.itemId,
       registry: captureRegistry,
       llm: ctx.llm,
+        radiator: ctx.radiator,
       screenshotsDir: config.screenshotsDir,
     }).catch((err) => ctx.logger.error(`refetch "${input.itemId}" failed to start: ${(err as Error).message}`));
     return { itemId: input.itemId, status: 'processing' };

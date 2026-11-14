@@ -154,6 +154,7 @@ export const composeCollectionSkill = defineSkill(
 
 export interface AcceptDeps {
   llm: Ctx['llm'];
+  radiator?: Ctx['radiator'];
   enqueueSnapshot?: (args: { itemId: string; url: string | null }) => void;
 }
 
@@ -187,7 +188,7 @@ export async function acceptComposerProposal(
     if (!existing.has(boardId)) throw new Error(`Cannot accept: unknown target board "${boardId}"`);
   }
   for (const [boardId, itemIds] of byBoard) {
-    const res = await assignItems(handle, { itemIds, boardId, llm: deps.llm, registry: captureRegistry, enqueueSnapshot: deps.enqueueSnapshot });
+    const res = await assignItems(handle, { itemIds, boardId, llm: deps.llm, radiator: deps.radiator, registry: captureRegistry, enqueueSnapshot: deps.enqueueSnapshot });
     await res.settled;
     assigned.push(...res.assigned);
   }

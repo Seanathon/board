@@ -1,7 +1,9 @@
 import { eq } from 'drizzle-orm';
+import { generationOf, RADIATOR_BOARD_ID, RADIATOR_PROFILE_KEY } from '../radiator/contract.js';
+import { getSetting } from '../db/settings.js';
 
-import { boards, items, type NewAsset } from '../db/schema.js';
-import { enqueueWrite, writeItemDirect } from '../db/queue.js';
+import { assets, boards, items, type NewAsset } from '../db/schema.js';
+import { enqueueTransaction, writeItemDirect } from '../db/queue.js';
 import { statusHub } from '../sse.js';
 import { createUrlScreenshotAdapter } from './url-screenshot.js';
 import { createUrlReadableAdapter } from './url-readable.js';
@@ -133,13 +135,19 @@ export async function runCaptureForItem(
     signal?: AbortSignal;
     screenshotsDir?: string;
     registerTeardown?: (teardown: () => Promise<void>) => void;
+    /** Optional identity/cancellation guard, rechecked inside the serialized commit. */
+    assertCurrent?: () => void;
   },
 ): Promise<void> {
+  const beforeCapture = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
+  if (!beforeCapture || beforeCapture.boardId !== args.boardId) throw new Error('Capture item changed or was deleted');
   const board = handle.db.select().from(boards).where(eq(boards.id, args.boardId)).get();
   const descriptor = board?.descriptor as BoardDescriptor | undefined;
   const ingestMode = descriptor?.ingest_mode;
   if (!ingestMode) throw new Error(`Board "${args.boardId}" has no ingest_mode`);
 
+  const protectAssets = args.boardId === RADIATOR_BOARD_ID && getSetting(handle, RADIATOR_PROFILE_KEY) !== undefined;
+  const beforeAssets = protectAssets ? handle.db.select().from(assets).where(eq(assets.itemId, args.itemId)).orderBy(assets.id).all() : [];
   const result = await dispatchCapture(registry, ingestMode, args.source, {
     itemId: args.itemId,
     boardId: args.boardId,
@@ -168,14 +176,21 @@ export async function runCaptureForItem(
     hash: a.hash ?? null,
   }));
 
+  let committedAssets = assetRows;
   // Read the row and write it back in ONE op on the write lane, with no await between
   // them — `writeItemDirect` takes the FULL desired row, so a merge built from a stale
   // snapshot would revert whatever landed in between. Enqueued rather than called
   // directly: jobs and writes are separate lanes now, so a write from inside a job no
   // longer self-deadlocks. Replaces the item's assets (delete-then-insert) → idempotent
   // re-capture.
-  const prevTitle = await enqueueWrite(() => {
+  const prevTitle = await enqueueTransaction(handle, () => {
+    args.assertCurrent?.();
     const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
+    args.signal?.throwIfAborted();
+    if (!item || item.boardId !== beforeCapture.boardId || item.source !== beforeCapture.source || generationOf(item) !== generationOf(beforeCapture)) throw new Error('Capture item changed or was deleted');
+    const currentAssets = protectAssets ? handle.db.select().from(assets).where(eq(assets.itemId, args.itemId)).orderBy(assets.id).all() : [];
+    const preserveUpload = protectAssets && JSON.stringify(currentAssets) !== JSON.stringify(beforeAssets);
+    if (preserveUpload) { committedAssets = currentAssets; delete capturedFields.screenshot; delete capturedFields.image; }
     writeItemDirect(
       handle,
       {
@@ -185,7 +200,7 @@ export async function runCaptureForItem(
         boardId: args.boardId,
         fields: { ...((item?.fields as Record<string, unknown>) ?? {}), ...capturedFields },
       },
-      assetRows,
+      preserveUpload ? undefined : assetRows,
     );
     return item?.title ?? undefined;
   });
@@ -194,7 +209,7 @@ export async function runCaptureForItem(
   // still outstanding, and the item's DB status stays `processing` throughout. Announce
   // the partial fill so the card shows the real page instead of a skeleton while the
   // LLM runs. Distinct from a status transition — nothing in the DB changed state.
-  const shot = assetRows.find((a) => a.kind === 'screenshot') ?? assetRows.find((a) => a.kind === 'image');
+  const shot = committedAssets.find((a) => a.kind === 'screenshot') ?? committedAssets.find((a) => a.kind === 'image');
   statusHub.publish({
     itemId: args.itemId,
     boardId: args.boardId,
