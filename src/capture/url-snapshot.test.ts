@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { eq } from 'drizzle-orm';
 
 import { createUrlSnapshotCapture, type CaptureHtmlFn } from './url-snapshot.js';
@@ -96,7 +96,7 @@ describe('writeSnapshotAsset — additive, no-regression, dedupe (Story 16.1)', 
       assert.equal(rows.length, 2, 'item has both the screenshot AND the snapshot');
       assert.ok(rows.some((r) => r.kind === 'snapshot' && r.id === 'it1-snapshot'));
       // the snapshot .html was written
-      assert.ok(existsSync(join(snapshotsDir, 'it1.html')), 'snapshot html written');
+      assert.ok(existsSync(join(snapshotsDir, basename(res.asset!.path))), 'snapshot html written');
     } finally {
       handle.sqlite.close();
       rmSync(dir, { recursive: true, force: true });
@@ -215,7 +215,9 @@ describe('runSnapshotJob — status-neutral degradation (Story 16.1)', () => {
       });
       // Public IP literal so the SSRF guard takes its DNS-free path — the browser launches
       // promptly and the timeout-then-SIGKILL timing under test is deterministic.
-      const p = runSnapshotJob(handle, { itemId: 'd1', url: 'https://93.184.216.34', capture, snapshotsDir: join(dir, 'snapshots'), timeoutFn: t.fn });
+      const request = { itemId: 'd1', url: 'https://93.184.216.34', capture, snapshotsDir: join(dir, 'snapshots'), timeoutFn: t.fn };
+      handle.db.update(items).set({ source: request.url }).where(eq(items.id, request.itemId)).run();
+      const p = runSnapshotJob(handle, request);
       await new Promise((r) => setImmediate(r));
       t.fire(); // trip the timeout
       const res = await p;
@@ -255,7 +257,7 @@ describe('runSnapshotJob — success path through the worker slot (Story 16.1)',
       const row = handle.db.select().from(assets).where(eq(assets.id, 'ok1-snapshot')).get();
       assert.ok(row, 'snapshot asset row persisted');
       assert.equal(row.kind, 'snapshot');
-      assert.ok(existsSync(join(dir, 'snapshots', 'ok1.html')), 'snapshot html written');
+      assert.ok(existsSync(join(dir, row.path)), 'snapshot html written');
       assert.equal(handle.db.select().from(items).where(eq(items.id, 'ok1')).get()!.status, 'done', 'status untouched');
     } finally {
       handle.sqlite.close();

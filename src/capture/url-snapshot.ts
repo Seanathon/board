@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { launchBrowser } from '../browser.js';
 import { config } from '../config.js';
 import type { DbHandle } from '../db/index.js';
-import { enqueueJob, type TimeoutFn } from '../db/queue.js';
+import { beginItemLease, currentLeaseItem } from '../db/item-lease.js';
+import { enqueueJob, enqueueWrite, type TimeoutFn } from '../db/queue.js';
 import { writeSnapshotAssetDirect, type SnapshotAssetRef, type SnapshotCapture } from '../db/snapshot-asset.js';
 import { createBrowserTeardown, type TeardownBrowser } from './teardown.js';
 import { assertCapturableUrl } from './net-guard.js';
@@ -141,6 +142,7 @@ export type SnapshotOutcome =
  * failure is swallowed: no asset, no status change, no error surfaced.
  */
 export async function runSnapshotJob(handle: DbHandle, opts: RunSnapshotJobOpts): Promise<SnapshotOutcome> {
+  const lease = beginItemLease(handle, opts.itemId, false);
   const capture = opts.capture ?? createUrlSnapshotCapture();
   const snapshotsDir = opts.snapshotsDir ?? config.snapshotsDir;
   let outcome: SnapshotOutcome = { status: 'failed' };
@@ -151,6 +153,7 @@ export async function runSnapshotJob(handle: DbHandle, opts: RunSnapshotJobOpts)
       type: 'snapshot',
       timeoutMs: opts.timeoutMs ?? SNAPSHOT_TIMEOUT_MS,
       run: async (signal) => {
+        if (!currentLeaseItem(handle, lease, signal) || lease?.item.source !== opts.url) return;
         const cap = await capture.capture(opts.url, {
           itemId: opts.itemId,
           signal,
@@ -160,14 +163,16 @@ export async function runSnapshotJob(handle: DbHandle, opts: RunSnapshotJobOpts)
           outcome = { status: 'skipped' }; // over the byte cap
           return;
         }
-        // DIRECT (no enqueue): we already hold the single-writer slot inside this job;
-        // the enqueued writeSnapshotAsset here would deadlock (inner enqueue waits on
-        // the outer slot, which awaits the inner) — the writeItemDirect trap.
-        const { written, asset } = writeSnapshotAssetDirect(handle, opts.itemId, cap, {
-          snapshotsDir,
-          writeFile: opts.writeFile,
+        // Jobs and writes use separate lanes. Check the lease and persist together
+        // in the write lane; a timeout must not attach a late snapshot.
+        await enqueueWrite(() => {
+          if (!currentLeaseItem(handle, lease, signal)) return;
+          const { written, asset } = writeSnapshotAssetDirect(handle, opts.itemId, cap, {
+            snapshotsDir,
+            writeFile: opts.writeFile,
+          });
+          outcome = written && asset ? { status: 'written', asset } : { status: 'deduped' };
         });
-        outcome = written && asset ? { status: 'written', asset } : { status: 'deduped' };
       },
       // On timeout the worker awaits this before releasing the slot, so the capture's
       // browser is SIGKILL-ed (memoized teardown) before the next job can launch — two

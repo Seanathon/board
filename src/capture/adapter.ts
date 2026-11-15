@@ -1,6 +1,7 @@
+import { manualFieldSnapshot, manualFieldUnchanged, beginItemLease, signalItemLease, currentLeaseItem, unchangedField, type ItemLease } from '../db/item-lease.js';
 import { eq } from 'drizzle-orm';
 
-import { boards, items, type NewAsset } from '../db/schema.js';
+import { assets, boards, items, type NewAsset } from '../db/schema.js';
 import { enqueueWrite, writeItemDirect } from '../db/queue.js';
 import { statusHub } from '../sse.js';
 import { createUrlScreenshotAdapter } from './url-screenshot.js';
@@ -54,6 +55,8 @@ export interface CaptureCtx {
   boardId: string;
   /** Honored for cooperative cancellation on timeout (Story 5.1/6.5). */
   signal?: AbortSignal;
+  /** Fresh lease check before an adapter writes any captured file. */
+  isCurrent?: () => boolean;
   /** Where url adapters write screenshot/asset files (Story 2.2). */
   screenshotsDir?: string;
   /**
@@ -129,12 +132,20 @@ export async function runCaptureForItem(
   args: {
     itemId: string;
     boardId: string;
+    lease?: ItemLease;
     source: CaptureSource;
     signal?: AbortSignal;
     screenshotsDir?: string;
     registerTeardown?: (teardown: () => Promise<void>) => void;
   },
 ): Promise<void> {
+  const fieldRevisions = manualFieldSnapshot(handle, args.itemId);
+  const lease = args.lease ?? signalItemLease(args.signal) ?? beginItemLease(handle, args.itemId);
+  const initial = currentLeaseItem(handle, lease, args.signal);
+  if (!initial || initial.boardId !== args.boardId || (typeof args.source === 'string' && initial.source !== args.source)) return;
+  const initialAssets = handle.db.select().from(assets).where(eq(assets.itemId, args.itemId)).all();
+  const isCurrent = () => !!currentLeaseItem(handle, lease, args.signal) &&
+    JSON.stringify(handle.db.select().from(assets).where(eq(assets.itemId, args.itemId)).all()) === JSON.stringify(initialAssets);
   const board = handle.db.select().from(boards).where(eq(boards.id, args.boardId)).get();
   const descriptor = board?.descriptor as BoardDescriptor | undefined;
   const ingestMode = descriptor?.ingest_mode;
@@ -144,6 +155,7 @@ export async function runCaptureForItem(
     itemId: args.itemId,
     boardId: args.boardId,
     signal: args.signal,
+    isCurrent,
     screenshotsDir: args.screenshotsDir,
     registerTeardown: args.registerTeardown,
   });
@@ -155,8 +167,8 @@ export async function runCaptureForItem(
   const systemUpdates: Record<string, unknown> = {};
   const capturedFields: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(result.fields)) {
-    if (SYSTEM_COLUMNS.has(k)) systemUpdates[k] = v;
-    else capturedFields[k] = v;
+    if (k === 'title') systemUpdates[k] = v;
+    else if (!SYSTEM_COLUMNS.has(k) && !descriptor?.fields.some(f => f.key === k && f.enrichable === false)) capturedFields[k] = v;
   }
   const assetRows: NewAsset[] = result.assets.map((a, i) => ({
     id: `${args.itemId}-${a.kind}-${i}`,
@@ -174,8 +186,13 @@ export async function runCaptureForItem(
   // directly: jobs and writes are separate lanes now, so a write from inside a job no
   // longer self-deadlocks. Replaces the item's assets (delete-then-insert) → idempotent
   // re-capture.
-  const prevTitle = await enqueueWrite(() => {
-    const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
+  const committed = await enqueueWrite(() => {
+    const item = currentLeaseItem(handle, lease, args.signal);
+    if (!item || !isCurrent()) return undefined;
+    for (const key of Object.keys(capturedFields)) {
+      if (!manualFieldUnchanged(handle, args.itemId, fieldRevisions, key) || !unchangedField((initial.fields ?? {}) as Record<string, unknown>, (item.fields ?? {}) as Record<string, unknown>, key)) delete capturedFields[key];
+    }
+    if (item.title !== initial.title) delete systemUpdates.title;
     writeItemDirect(
       handle,
       {
@@ -185,10 +202,12 @@ export async function runCaptureForItem(
         boardId: args.boardId,
         fields: { ...((item?.fields as Record<string, unknown>) ?? {}), ...capturedFields },
       },
-      assetRows,
+      [...initialAssets.filter(a => !assetRows.some(next => next.kind === a.kind)), ...assetRows],
     );
-    return item?.title ?? undefined;
+    return { title: item.title ?? undefined };
   });
+
+  if (!committed) return;
 
   // Progressive reveal: the row now holds the page (title + image) but the AI read is
   // still outstanding, and the item's DB status stays `processing` throughout. Announce
@@ -199,7 +218,7 @@ export async function runCaptureForItem(
     itemId: args.itemId,
     boardId: args.boardId,
     status: 'captured',
-    title: (systemUpdates as { title?: string }).title ?? prevTitle,
+    title: (systemUpdates as { title?: string }).title ?? committed.title,
     screenshot: shot?.path || undefined,
   });
 }

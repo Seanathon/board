@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -130,10 +130,11 @@ export function createUrlScreenshotAdapter(deps: Deps = {}): CaptureAdapter {
         }));
 
         const screenshotsDir = ctx.screenshotsDir ?? config.screenshotsDir;
-        const filename = `${ctx.itemId}.png`;
+        const filename = `${ctx.itemId}-${randomUUID()}.png`;
         const abs = join(screenshotsDir, filename);
         mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs, buf);
+        if (ctx.signal?.aborted || ctx.isCurrent?.() === false) throw new Error('Capture superseded');
+        writeFileSync(abs, buf, { flag: 'wx' });
         const hash = createHash('sha256').update(buf).digest('hex');
 
         const asset: AssetSpec = {

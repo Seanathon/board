@@ -1,3 +1,4 @@
+import { bindItemLease, beginItemLease, currentLeaseItem, invalidateItemLease, type ItemLease } from './item-lease.js';
 import { eq, sql } from 'drizzle-orm';
 
 import { assets, boards, items, type NewAsset, type NewItem } from './schema.js';
@@ -245,6 +246,7 @@ export function writeItem(handle: DbHandle, item: NewItem, itemAssets?: NewAsset
  * `writeItem`, which wraps this in the queue.
  */
 export function writeItemDirect(handle: DbHandle, item: NewItem, itemAssets?: NewAsset[]): void {
+  const previous = handle.db.select().from(items).where(eq(items.id, item.id)).get();
   handle.sqlite.transaction(() => {
     const board = handle.db.select().from(boards).where(eq(boards.id, item.boardId)).get();
     const descriptor = (board?.descriptor as BoardDescriptor | undefined) ?? undefined;
@@ -269,6 +271,7 @@ export function writeItemDirect(handle: DbHandle, item: NewItem, itemAssets?: Ne
       for (const a of itemAssets) handle.db.insert(assets).values(a).run();
     }
   })();
+  if (!previous || previous.boardId !== item.boardId || (item.source !== undefined && previous.source !== item.source)) invalidateItemLease(handle, item.id);
 }
 
 // --- Story 5.2: item status lifecycle (pending → processing → done | error) ---
@@ -319,7 +322,7 @@ export interface RunItemJobArgs {
   itemId: string;
   type: string;
   timeoutMs: number;
-  work: (signal: AbortSignal) => Promise<void> | void;
+  work: (signal: AbortSignal, lease?: ItemLease) => Promise<void> | void;
   teardown?: (signal: AbortSignal) => Promise<void>;
   timeoutFn?: TimeoutFn;
 }
@@ -344,6 +347,7 @@ export interface RunItemJobArgs {
  * — the exact thing that guard exists to prevent.
  */
 export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promise<JobResult> {
+  const lease = beginItemLease(handle, args.itemId);
   const job: Job = {
     type: args.type,
     timeoutMs: args.timeoutMs,
@@ -352,15 +356,17 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
       // Our turn: leave the line, then tell everyone behind us they moved up.
       leaveJobLine(args.itemId);
       publishJobLine(handle);
+      if (!currentLeaseItem(handle, lease, signal)) return;
+      bindItemLease(signal, lease);
       setItemStatusDirect(handle, args.itemId, 'processing', null);
       try {
-        await args.work(signal);
+        await args.work(signal, lease);
         // If the job already timed out, the timeout path OWNS the terminal status —
         // a late-settling abandoned work must NOT clobber `error` back to `done`.
-        if (signal.aborted) return;
+        if (!currentLeaseItem(handle, lease, signal)) return;
         setItemStatusDirect(handle, args.itemId, 'done', null);
       } catch (err) {
-        if (signal.aborted) return; // timeout already wrote the terminal status
+        if (!currentLeaseItem(handle, lease, signal)) return; // timeout already wrote the terminal status
         if (err instanceof EnrichmentDisabledError) {
           setItemStatusDirect(handle, args.itemId, 'done', null); // disabled = done, not error
         } else {
@@ -383,7 +389,9 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
   // Timeout: the work was abandoned (possibly still `processing`) — record the
   // terminal error status through the writer so the item is never stuck.
   if (result.timedOut) {
-    await enqueueWrite(() => setItemStatusDirect(handle, args.itemId, 'error', 'timed out'));
+    await enqueueWrite(() => {
+      if (currentLeaseItem(handle, lease)) setItemStatusDirect(handle, args.itemId, 'error', 'timed out');
+    });
   }
   return result;
 }
@@ -412,6 +420,7 @@ export function deleteItem(handle: DbHandle, id: string): Promise<void> {
   return enqueueTransaction(handle, () => {
     handle.db.delete(assets).where(eq(assets.itemId, id)).run();
     handle.db.delete(items).where(eq(items.id, id)).run();
+    invalidateItemLease(handle, id);
     handle.sqlite.prepare('DELETE FROM item_fts WHERE item_id = ?').run(id);
   });
 }
