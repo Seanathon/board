@@ -248,8 +248,8 @@ Everything is owner-only (`0600`/`0700`) and best-effort: a full disk never fail
 A board whose recent jobs mostly fail logs one line you can alert on:
 
 ```
-ALERT board radiator-9k51: 7 of the last 10 jobs failed (70%, threshold 50%)
-RECOVERED board radiator-9k51: 2 of the last 10 jobs failed (20%)
+ALERT board my-board: 7 of the last 10 jobs failed (70%, threshold 50%)
+RECOVERED board my-board: 2 of the last 10 jobs failed (20%)
 ```
 
 `GET /api/health/jobs` returns the same rolling counts per board (no item data).

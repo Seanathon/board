@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /**
- * Export a release's public source FROM A COMMIT (never the working tree) and write
- * the pinned manifest that private-entry.mjs verifies.
+ * Export a release's source FROM A COMMIT (never the working tree) and write a pinned
+ * manifest of file hashes that a release loader can verify.
  *
- * Why: the browser-discovery-20261115-r4 release was assembled from an uncommitted
- * worktree diff, so no commit, branch or PR matched what was running. Building from a
- * commit makes "which source is live" answerable with `git show <commit>`.
+ * Why: a release assembled from an uncommitted worktree diff leaves no commit, branch or
+ * PR that matches what is running. Building from a commit makes "which source is live"
+ * answerable with `git show <commit>`.
  *
  *   node scripts/release-source.mjs --commit <ref> --out <empty dir> [--require-pushed] [--remote origin]
  *
  * Writes <out>/tree/** (the tracked files at that commit) and <out>/manifest.json:
  *   { commit, sourceState: "committed", buildSha256, files: { path: sha256 } }
- * `buildSha256` uses the exact formula private-entry.mjs checks. Uncommitted changes
+ * `buildSha256` is sha256 of the JSON of the sorted [path, sha256] pairs. Uncommitted changes
  * are ignored by construction. With --require-pushed the commit must already be
  * reachable from a remote branch, so the source is recoverable from the remote.
  */

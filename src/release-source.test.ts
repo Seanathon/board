@@ -28,7 +28,7 @@ describe('release-source: build a release from a commit, not the working tree', 
   });
   after(() => rmSync(root, { recursive: true, force: true }));
 
-  it('exports exactly the committed files and a manifest private-entry can verify', () => {
+  it('exports exactly the committed files and a manifest a pinned-release loader can verify', () => {
     const out = join(root, 'out1');
     const m = exportCommit({ repo, ref: 'HEAD', outDir: out });
     assert.equal(m.commit, committed);

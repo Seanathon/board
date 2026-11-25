@@ -87,20 +87,20 @@ describe('parseJsonFromText tolerance', () => {
     assert.deepEqual(parseJsonFromText('Here:\n{"a":1,"b",\n"c":3}\nDone.'), { a: 1, c: 3 });
   });
 
-  it('regression: real Sonnet output for leverage.computer that dropped one field value', () => {
-    // Captured from a scratch run of the Radiator runtime. The model wrote
-    // `"intel_v1.comparison",` with no value; strict JSON.parse rejected the whole
-    // response (SyntaxError at line 13) and the item ended as "processing failed".
+  it('regression: a model output that wrote one field key with no value keeps its other fields', () => {
+    // A model told it may omit fields wrote `"comparison",` with no value in the middle of
+    // an otherwise valid, fenced response. Strict JSON.parse rejected the whole thing and the
+    // item ended as "processing failed" with every good field discarded.
     const raw = readFileSync(new URL('./fixtures/model-output-dangling-key.txt', import.meta.url), 'utf8');
     assert.throws(() => JSON.parse(raw.replace(/^```json\s*|\s*```$/g, '')), SyntaxError);
     const { value, repairs } = parseJsonFromTextWithRepairs(raw);
-    assert.deepEqual(repairs, [{ kind: 'dangling-key', key: 'intel_v1.comparison' }]);
+    assert.deepEqual(repairs, [{ kind: 'dangling-key', key: 'comparison' }]);
     const { itemId, source, fields } = value as { itemId: string; source: string; fields: Record<string, string> };
-    assert.equal(source, 'https://leverage.computer/');
+    assert.equal(source, 'https://example.com/');
     assert.match(itemId, /^[0-9a-f-]{36}$/);
-    assert.equal(fields['intel_v1.relevance'], 'direct-competitor');
+    assert.equal(fields.category, 'reference');
     assert.equal(Object.keys(fields).length, 11);
-    assert.ok(!('intel_v1.comparison' in fields), 'the field the model dropped stays absent, not invented');
+    assert.ok(!('comparison' in fields), 'the field the model dropped stays absent, not invented');
     for (const v of Object.values(fields)) assert.equal(typeof v, 'string');
   });
 });

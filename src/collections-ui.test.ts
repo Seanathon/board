@@ -86,7 +86,7 @@ test("addUrl builds correct path (same as itemsUrl)", () => {
 });
 
 test("retryUrl builds the analysis-retry path", () => {
-  assert.equal(retryUrl("radiator", "it-1"), "/api/collections/radiator/items/it-1/retry");
+  assert.equal(retryUrl("inspiration", "it-1"), "/api/collections/inspiration/items/it-1/retry");
 });
 
 test("refetchUrl builds correct path", () => {

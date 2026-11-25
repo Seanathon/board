@@ -45,7 +45,7 @@ describe('model output contract: accepted variants keep every good field', () =>
     ['fenced block without language', '```\n' + goodJson + '\n```', good],
     ['prose before and after', 'Here is the analysis:\n' + goodJson + '\nLet me know if you need more.', good],
     ['trailing comma', goodJson.replace(/\n\}$/, ',\n}'), good],
-    ['last field written with no value (the leverage.computer failure shape)', goodJson.replace('"score": 3', '"score"'), { summary: 'A product.', relevance: 'adjacent', tags: ['a', 'b'] }],
+    ['last field written with no value (the dropped-value failure shape)', goodJson.replace('"score": 3', '"score"'), { summary: 'A product.', relevance: 'adjacent', tags: ['a', 'b'] }],
     ['dangling key in the middle', goodJson.replace('"relevance": "adjacent",', '"relevance",'), { summary: 'A product.', tags: ['a', 'b'], score: 3 }],
     ['unknown extra field is dropped, not an error', JSON.stringify({ ...good, confidence: 0.9 }), good],
     ['optional fields omitted', JSON.stringify({ summary: 'only this' }), { summary: 'only this' }],
