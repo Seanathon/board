@@ -11,7 +11,7 @@ import { boards, assets, items } from '../db/schema.js';
 import { createCaptureRegistry } from '../capture/adapter.js';
 import type { LLMProvider } from '../skills/types.js';
 import type { TimeoutFn } from '../db/queue.js';
-import { refetchItem, reenrichBoardItems } from './refetch.js';
+import { refetchItem, reenrichBoardItems, retryItemAnalysis } from './refetch.js';
 
 const neverFires: TimeoutFn = () => () => {};
 
@@ -111,5 +111,65 @@ describe('reenrichBoardItems (batch re-run)', () => {
     const llm: LLMProvider = { complete: async () => ({}) as never };
     const { queued } = reenrichBoardItems(handle, { boardId: 'empty', llm, registry, timeoutFn: neverFires });
     assert.equal(queued, 0);
+  });
+});
+
+describe('retryItemAnalysis: retry a failed item without re-capturing', () => {
+  let dir: string;
+  let handle: ReturnType<typeof initDb>;
+  let captures: number;
+  const registry = createCaptureRegistry();
+  const llm: LLMProvider = { complete: async () => ({ summary: 'RETRIED summary' }) as never };
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'board-oss-retry-'));
+    handle = initDb(join(dir, 'r.db'));
+    handle.db.insert(boards).values({ id: 'b', name: 'B', view: 'grid', descriptor: DESCRIPTOR }).run();
+    registry.register({
+      ingestMode: 'test',
+      fetch: async () => { captures++; return { fields: { text: 'recaptured text' }, assets: [] }; },
+    });
+  });
+  after(() => { handle.sqlite.close(); rmSync(dir, { recursive: true, force: true }); });
+  const seed = (id: string, over: Record<string, unknown> = {}) =>
+    handle.db.insert(items).values({ id, boardId: 'b', source: 'https://x.example', status: 'error', errorReason: 'AI returned invalid output', notes: 'mine', ...over } as never).run();
+  const row = (id: string) => handle.db.select().from(items).where(eq(items.id, id)).get();
+
+  it('re-runs analysis only when page text was saved: keeps text and screenshot, never captures', async () => {
+    captures = 0;
+    seed('keep', { fields: { text: 'saved page text' } });
+    handle.db.insert(assets).values({ id: 'keep-shot', itemId: 'keep', kind: 'screenshot', path: 'screenshots/keep.png' }).run();
+    const result = await retryItemAnalysis(handle, { itemId: 'keep', registry, llm, timeoutFn: neverFires });
+    assert.equal(result.ok, true);
+    assert.equal(captures, 0, 'capture must not run');
+    const r = row('keep');
+    assert.equal(r?.status, 'done');
+    assert.equal(r?.errorReason, null);
+    assert.equal((r?.fields as Record<string, unknown>).text, 'saved page text');
+    assert.equal((r?.fields as Record<string, unknown>).summary, 'RETRIED summary');
+    assert.equal(r?.notes, 'mine');
+    assert.equal(handle.db.select().from(assets).where(eq(assets.itemId, 'keep')).all()[0]?.path, 'screenshots/keep.png');
+  });
+
+  it('falls back to a full capture + analysis when no page text was ever saved', async () => {
+    captures = 0;
+    seed('nocap', { fields: {} });
+    const result = await retryItemAnalysis(handle, { itemId: 'nocap', registry, llm, screenshotsDir: dir, timeoutFn: neverFires });
+    assert.equal(result.ok, true);
+    assert.equal(captures, 1);
+    assert.equal((row('nocap')?.fields as Record<string, unknown>).text, 'recaptured text');
+  });
+
+  it('leaves an item that is already in flight alone', async () => {
+    let calls = 0;
+    seed('busy', { status: 'processing', fields: { text: 't' } });
+    const result = await retryItemAnalysis(handle, { itemId: 'busy', registry, llm: { complete: async () => { calls++; return {} as never; } }, timeoutFn: neverFires });
+    assert.deepEqual([result.ok, (result as { skipped?: string }).skipped], [true, 'in-flight']);
+    assert.equal(calls, 0);
+    assert.equal(row('busy')?.status, 'processing');
+  });
+
+  it('throws on an unknown item', async () => {
+    await assert.rejects(() => retryItemAnalysis(handle, { itemId: 'nope', registry, llm, timeoutFn: neverFires }), /unknown item/);
   });
 });

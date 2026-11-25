@@ -23,9 +23,9 @@ import { patchItemFields, deleteItemWithAssets } from "./db/item-actions.js";
 import { uploadAssetForItem } from "./capture/manual-upload.js";
 import { listBoardItemsForUi, getItemForUi } from "./db/hydrate.js";
 import { renameBoard, deleteBoardCascade } from "./db/board-actions.js";
-import { boards as boardsTable } from "./db/schema.js";
+import { boards as boardsTable, items } from "./db/schema.js";
 import { addItemSkill } from "./skills/add-item.js";
-import { refetchItem, reenrichBoardItems } from "./enrichment/refetch.js";
+import { refetchItem, reenrichBoardItems, retryItemAnalysis } from "./enrichment/refetch.js";
 import { assignItems } from "./enrichment/assign.js";
 import { archiveFootprint } from "./db/archive-footprint.js";
 import { createRegistry, registerAllSkills, type SkillRegistry } from "./skills/registry.js";
@@ -822,6 +822,21 @@ t.addEventListener('input',upd);upd();
       void refetchItem(handle, { itemId: req.params.id, registry: captureRegistry, llm, screenshotsDir })
         .catch((e) => logger.error(`refetch "${req.params.id}" failed to start: ${(e as Error).message}`));
       return getItemForUi(handle, req.params.id) ?? { id: req.params.id, status: "processing" };
+    }
+  );
+
+  // Retry a failed item's analysis. Keeps the saved page text and screenshot (no
+  // re-capture) when they exist; falls back to a full refetch when capture never
+  // produced text. Idempotent while the item is already in flight.
+  app.post<{ Params: { cid: string; id: string } }>(
+    "/api/collections/:cid/items/:id/retry",
+    async (req, reply) => {
+      const handle = opts.db ?? getDb();
+      const row = handle.db.select().from(items).where(eq(items.id, req.params.id)).get();
+      if (!row || row.boardId !== req.params.cid) { reply.status(404); return { error: "Not found" }; }
+      void retryItemAnalysis(handle, { itemId: row.id, registry: captureRegistry, llm, screenshotsDir })
+        .catch((e) => logger.error(`retry "${row.id}" failed to start: ${(e as Error).message}`));
+      return getItemForUi(handle, row.id) ?? { id: row.id, status: "processing" };
     }
   );
 

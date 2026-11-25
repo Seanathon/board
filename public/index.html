@@ -3759,16 +3759,17 @@ LLM_API_KEY=sk-…</pre>
   }
 
   /**
-   * Re-run capture + enrichment for a failed item via the existing refetch route.
-   * The card returns to its in-flight state immediately; SSE drives it from there.
+   * Retry a failed item. The server re-runs only the analysis when the page text is
+   * already saved (no re-capture), else a full refetch. The card returns to its
+   * in-flight state immediately; SSE drives it from there.
    */
   async function retryItem(id, btn) {
     if (btn) { btn.disabled = true; btn.textContent = 'Retrying…'; }
     const item = bookmarks.find(b => b.id === id);
     if (item) { item.status = 'processing'; delete item.error_reason; applyFilters(); }
     try {
-      const res = await fetch(window.collectionHelpers.refetchUrl(activeCollection, id), { method: 'POST' });
-      if (!res.ok) throw new Error('refetch failed');
+      const res = await fetch(window.collectionHelpers.retryUrl(activeCollection, id), { method: 'POST' });
+      if (!res.ok) throw new Error('retry failed');
     } catch {
       if (item) { item.status = 'error'; item.error_reason = 'could not start a retry'; applyFilters(); }
     }
@@ -5351,8 +5352,8 @@ LLM_API_KEY=sk-…</pre>
   // load() is called by the module script below after collectionHelpers are initialized
 </script>
 <script type="module">
-  import { cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
-  window.collectionHelpers = { cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
+  import { cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, retryUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge } from './collections-ui.js';
+  window.collectionHelpers = { cardSummary, sortItems, resolveActiveCollection, itemsUrl, itemUrl, addUrl, refetchUrl, retryUrl, screenshotUrl, moveUrl, eventsUrl, itemRenderState, isInFlight, safeErrorReason, collectionChrome, matchesLibraryFilters, topicCounts, selectView, itemFieldEntries, getFieldValue, buildFilters, matchesFilters, applySseEvent, renderEnrichmentState, boardPurpose, renderEmptyState, renderBoardsFallback, shouldShowEnableAiNudge };
   // Story 7.2: generic descriptor-driven field renderer (Epic 8 wires it into the
   // descriptor-driven card/modal when the UI consumes the SQLite item model).
   import { renderField, renderFields, renderAsset, isSafeUrl } from './descriptor/render-map.js';

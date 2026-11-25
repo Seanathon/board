@@ -11,6 +11,8 @@ export const itemsUrl = (cid) => `/api/collections/${cid}/items`;
 export const itemUrl = (cid, id) => `/api/collections/${cid}/items/${id}`;
 export const addUrl = (cid) => `/api/collections/${cid}/items`;
 export const refetchUrl = (cid, id) => `/api/collections/${cid}/items/${id}/refetch`;
+// Retry a failed item's analysis; the server keeps the saved page text/screenshot when present.
+export const retryUrl = (cid, id) => `/api/collections/${cid}/items/${id}/retry`;
 export const screenshotUrl = (cid, id) => `/api/collections/${cid}/items/${id}/screenshot`;
 // Per-item move: reassigns an item's home board (single-FK) via the same-origin
 // twin of the v1 assign verb. POST { boardId } — see server.ts.

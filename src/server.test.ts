@@ -1040,3 +1040,31 @@ test('real Edit board checkbox persists independently and preserves optional des
     assert.equal(after.archive_on_promote, true); assert.deepEqual(after.empty_state, descriptor.empty_state);
   } finally { await browser?.close(); await app.close(); handle.sqlite.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("POST /api/collections/:cid/items/:id/retry 404s for an unknown item or a different board", async () => {
+  const { writeItem } = await import("./db/queue.js");
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    await writeItem(handle, { id: "rt-1", boardId: "library", source: "https://x", title: "T" });
+    assert.equal((await app.inject({ method: "POST", url: "/api/collections/library/items/nope/retry" })).statusCode, 404);
+    assert.equal((await app.inject({ method: "POST", url: "/api/collections/inbox/items/rt-1/retry" })).statusCode, 404);
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/collections/:cid/items/:id/retry accepts a failed item and returns it", async () => {
+  const { writeItem } = await import("./db/queue.js");
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    await writeItem(handle, { id: "rt-2", boardId: "library", source: "https://x", title: "T", status: "error", fields: { text: "saved" } });
+    const res = await app.inject({ method: "POST", url: "/api/collections/library/items/rt-2/retry" });
+    assert.equal(res.statusCode, 200);
+    assert.equal((JSON.parse(res.body) as any).id, "rt-2");
+    await new Promise((r) => setTimeout(r, 50)); // let the fire-and-forget job settle before closing the DB
+  } finally {
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
