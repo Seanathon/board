@@ -3205,10 +3205,13 @@ LLM_API_KEY=sk-…</pre>
     ai.onclick = () => { ai.dataset.on = ai.dataset.on === 'true' ? 'false' : 'true'; };
   }
 
+  let editingDescriptor = {};
+  let initialEditorDescriptor = "";
   function openEditBoardModal(boardId) {
     const col = collections.find(c => c.id === boardId);
     if (!col) return;
     const d = col.descriptor || { fields: [], enrichment_prompt: '', view: 'grid', ingest_mode: 'url-readable' };
+    editingDescriptor = d;
     const viewOpts = ['grid', 'list'].map(v => `<option value="${v}"${d.view === v ? ' selected' : ''}>${v}</option>`).join('');
     const ingestOpts = ['url-screenshot', 'url-readable', 'manual-upload'].map(m => `<option value="${m}"${d.ingest_mode === m ? ' selected' : ''}>${m}</option>`).join('');
     showModalContent(`
@@ -3224,6 +3227,11 @@ LLM_API_KEY=sk-…</pre>
 
         <div class="field-label" style="margin-top:12px">Enrichment prompt (the AI lens for this board)</div>
         <textarea id="edit-board-prompt" class="reflection-input" rows="8" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;resize:vertical" placeholder="How should the AI analyze each item?">${esc(d.enrichment_prompt || '')}</textarea>
+
+        <div style="margin-top:16px">
+          <label><input id="edit-board-discovery" type="checkbox" aria-describedby="edit-board-discovery-help"${col.options?.browserDiscovery === true ? ' checked' : ''}> Browser-assisted discovery</label>
+          <p id="edit-board-discovery-help">When captured text is thin, let this board’s AI explore public documentation and read-only controls on the same site. Adds time and sends visited page text to your configured provider. No logins or form submissions.</p>
+        </div>
 
         <div class="field-label" style="margin-top:16px">Fields <span style="color:var(--text-3);font-weight:400">— check AI to let enrichment fill it; description guides the AI</span></div>
         <div id="board-fields-container">
@@ -3269,6 +3277,7 @@ LLM_API_KEY=sk-…</pre>
       row.querySelector('.bf-label').focus();
     };
 
+    initialEditorDescriptor = JSON.stringify(collectBoardDescriptor());
     document.getElementById('modal-cancel').onclick = closeModal;
     document.getElementById('edit-board-save').onclick = () => saveBoardEdits(boardId);
 
@@ -3299,18 +3308,37 @@ LLM_API_KEY=sk-…</pre>
       let key = row.querySelector('.bf-key').value.trim();
       if (!key && label) key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
       const type = row.querySelector('.bf-type').value;
-      const f = { key, label, type, enrichable: row.querySelector('.bf-ai').dataset.on === 'true' };
+      const f = { ...(editingDescriptor.fields || []).find(f => f.key === key), key, label, type, enrichable: row.querySelector('.bf-ai').dataset.on === 'true' };
       const desc = row.querySelector('.bf-desc').value.trim();
-      if (desc) f.description = desc;
-      if (type === 'enum') f.values = row.querySelector('.bf-values').value.split(',').map(s => s.trim()).filter(Boolean);
+      if (desc) f.description = desc; else delete f.description;
+      if (type === 'enum') f.values = row.querySelector('.bf-values').value.split(',').map(s => s.trim()).filter(Boolean); else delete f.values;
       return f;
     }).filter(f => f.key && f.label);
     return {
+      ...editingDescriptor,
       fields,
       enrichment_prompt: document.getElementById('edit-board-prompt').value,
       view: document.getElementById('edit-board-view').value,
       ingest_mode: document.getElementById('edit-board-ingest').value,
     };
+  }
+
+  async function persistBoardEdits(boardId, name, descriptor) {
+    const browserDiscovery = document.getElementById('edit-board-discovery').checked;
+    const col = collections.find(c => c.id === boardId);
+    const body = {};
+    if (name !== col.name) body.name = name;
+    if (JSON.stringify(descriptor) !== initialEditorDescriptor) body.descriptor = descriptor;
+    if (Object.keys(body).length) {
+      const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!res.ok) return res;
+    }
+    return fetch(`/api/boards/${encodeURIComponent(boardId)}/options`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ browserDiscovery }),
+    });
   }
 
   async function saveBoardEdits(boardId) {
@@ -3320,9 +3348,7 @@ LLM_API_KEY=sk-…</pre>
     const descriptor = collectBoardDescriptor();
     status.textContent = 'Saving…';
     try {
-      const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, descriptor }),
-      });
+      const res = await persistBoardEdits(boardId, name, descriptor);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { status.textContent = data.error ? `Invalid: ${data.error}` : 'Save failed'; return; }
       closeModal();
@@ -3337,9 +3363,7 @@ LLM_API_KEY=sk-…</pre>
       // Save any pending field edits first so the re-run uses the latest descriptor.
       // Guard: if the edits are invalid, do NOT re-run against the stale descriptor.
       const name = document.getElementById('edit-board-name').value.trim();
-      const saveRes = await fetch(`/api/boards/${encodeURIComponent(boardId)}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, descriptor: collectBoardDescriptor() }),
-      });
+      const saveRes = await persistBoardEdits(boardId, name, collectBoardDescriptor());
       if (!saveRes.ok) {
         const e = await saveRes.json().catch(() => ({}));
         status.textContent = e.error ? `Fix fields first: ${e.error}` : 'Fix field errors first';

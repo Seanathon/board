@@ -987,3 +987,56 @@ test("PATCH /api/settings refuses a key outside the allowlist", async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('board discovery options API is strict, board scoped, and descriptor independent', async () => {
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    const manifest = () => app.inject({ method: 'GET', url: '/api/collections' }).then(r => r.json());
+    const before = await manifest();
+    for (const body of [{ browserDiscovery: 'true' }, { browserDiscovery: true, system_prompt: 'no' }, {}]) {
+      assert.equal((await app.inject({ method: 'PATCH', url: '/api/boards/library/options', payload: body })).statusCode, 400);
+    }
+    assert.equal((await app.inject({ method: 'PATCH', url: '/api/boards/missing/options', payload: { browserDiscovery: true } })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'PATCH', url: '/api/boards/library/options', payload: { browserDiscovery: true } })).statusCode, 200);
+    const after = await manifest();
+    assert.equal(after.find((b: any) => b.id === 'library').options.browserDiscovery, true);
+    assert.equal(after.find((b: any) => b.id === 'inspiration').options.browserDiscovery, false);
+    assert.deepEqual(after.map((b: any) => b.descriptor), before.map((b: any) => b.descriptor));
+    assert.equal((await app.inject({ method: 'PATCH', url: '/api/settings', payload: { browserDiscovery: true } })).statusCode, 400);
+  } finally { await app.close(); handle.sqlite.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('real Edit board checkbox persists independently and preserves optional descriptor properties', { timeout: 30_000 }, async () => {
+  const { app, handle, dir } = await seededSqliteApp();
+  const { boards } = await import('./db/schema.js');
+  const { launchBrowser } = await import('./browser.js');
+  let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined;
+  try {
+    const board = handle.db.select().from(boards).where(eq(boards.id, 'library')).get()!;
+    const descriptor = { ...(board.descriptor as import('./descriptor/types.js').BoardDescriptor), archive_on_promote: true, empty_state: { head: 'Keep this', body: 'Keep this too' } };
+    handle.db.update(boards).set({ descriptor }).where(eq(boards.id, 'library')).run();
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    browser = await launchBrowser(); const page = await browser.newPage();
+    // This test only visits the local app; no fonts or other external services.
+    await page.setRequestInterception(true);
+    page.on('request', req => { void (req.url().startsWith(address + '/') ? req.continue() : req.abort()); });
+    await page.goto(address, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction('collections.some(c => c.id === "library")');
+    await page.evaluate('openEditBoardModal("library")');
+    assert.equal(await page.$eval('#edit-board-discovery', el => (el as HTMLInputElement).checked), false);
+    assert.equal(await page.$eval('#edit-board-discovery', el => el.getAttribute('aria-describedby')), 'edit-board-discovery-help');
+    await page.focus('#edit-board-discovery'); await page.keyboard.press('Space');
+    const saved = page.waitForResponse(res => res.url().endsWith('/api/boards/library/options') && res.request().method() === 'PATCH');
+    await page.click('#edit-board-save'); assert.equal((await saved).status(), 200);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction('collections.some(c => c.id === "library")');
+    await page.evaluate('openEditBoardModal("library")');
+    assert.equal(await page.$eval('#edit-board-discovery', el => (el as HTMLInputElement).checked), true);
+    assert.deepEqual(handle.db.select().from(boards).where(eq(boards.id, 'library')).get()!.descriptor, descriptor);
+    await page.$eval('#edit-board-prompt', el => { (el as HTMLTextAreaElement).value += '\nA new lens.'; });
+    const edited = page.waitForResponse(res => res.url().endsWith('/api/boards/library/options') && res.request().method() === 'PATCH');
+    await page.click('#edit-board-save'); assert.equal((await edited).status(), 200);
+    const after = handle.db.select().from(boards).where(eq(boards.id, 'library')).get()!.descriptor as import('./descriptor/types.js').BoardDescriptor;
+    assert.equal(after.archive_on_promote, true); assert.deepEqual(after.empty_state, descriptor.empty_state);
+  } finally { await browser?.close(); await app.close(); handle.sqlite.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

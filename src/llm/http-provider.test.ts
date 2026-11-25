@@ -100,3 +100,15 @@ describe('HttpProvider (Story 4.2)', () => {
       }),
   });
 });
+
+it('HTTP completion propagates scoped cancellation and refuses already-aborted work', async () => {
+  const controller = new AbortController(); let calls = 0;
+  const provider = new HttpProvider({ baseUrl: 'http://provider.invalid', model: 'configured-model', fetchImpl: (async (_url, init) => {
+    calls++; assert.equal(init?.signal, controller.signal);
+    return new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+  }) as typeof fetch });
+  const context = { itemId: 'i', boardId: 'b', source: null, signal: controller.signal, purpose: 'discovery' as const };
+  const work = provider.complete('p', z.object({ action: z.string() }), context);
+  controller.abort(); await assert.rejects(work, /HTTP request/);
+  await assert.rejects(provider.complete('p', z.object({}), context)); assert.equal(calls, 1);
+});

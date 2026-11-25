@@ -127,3 +127,47 @@ describe('CliProvider (Story 4.3)', () => {
       new CliProvider({ agent: { id: 'claude', model: null }, spawn: fakeSpawn({ stdout: raw, code: 0 }).spawn, timeoutMs: 1000 }),
   });
 });
+
+it('CLI cancellation kills but holds completion until close and never spawns pre-aborted work', async () => {
+  let close: ((code: number | Error) => void) | undefined; let kills = 0, calls = 0;
+  const spawn: SpawnFn = () => {
+    calls++;
+    return { stdout: { on() {} }, stderr: { on() {} }, on(event, cb) { if (event === 'close') close = cb; }, kill() { kills++; } };
+  };
+  const provider = new CliProvider({ agent: { id: 'claude', model: 'configured-model' }, spawn });
+  const controller = new AbortController(), context = { itemId: 'i', boardId: 'b', source: null, signal: controller.signal };
+  let finished = false;
+  const work = assert.rejects(provider.complete('p', z.object({}), context), /aborted/).then(() => { finished = true; });
+  controller.abort(); await new Promise(r => setImmediate(r));
+  assert.equal(kills, 1); assert.equal(finished, false); close!(0); await work;
+  await assert.rejects(provider.complete('p', z.object({}), context)); assert.equal(calls, 1);
+});
+
+
+it('Codex data-only completion disables inherited MCP entries without changing default completions', async () => {
+  const calls: string[][] = [];
+  const spawn: SpawnFn = (_command, args) => {
+    calls.push(args);
+    return fakeSpawn({ stdout: args[0] === 'mcp' ? '[{"name":"inherited","enabled":true},{"name":"already_off","enabled":false}]' : '', code: 0 }).spawn(_command, args, {});
+  };
+  const provider = new CliProvider({ agent: { id: 'codex', model: 'configured-model' }, spawn, readFile: () => '{"title":"ok","n":1}' });
+  await provider.complete('p', schema);
+  assert.equal(calls.length, 1);
+  assert(!calls[0].some(arg => arg.startsWith('mcp_servers.')));
+  calls.length = 0;
+  await provider.complete('p', schema, { itemId: 'i', boardId: 'b', source: 'https://example.com', purpose: 'discovery' });
+  assert.deepEqual(calls[0], ['mcp', 'list', '--json']);
+  assert(calls[1].includes('mcp_servers.inherited.enabled=false'));
+  assert(calls[1].includes('mcp_servers.already_off.enabled=false'));
+  assert(calls[1].includes('features.shell_tool=false'));
+  assert(!calls[1].includes('mcp_servers={}'));
+});
+
+it('Codex discovery refuses malformed MCP inventories before starting inference', async () => {
+  for (const stdout of ['not json', '{}', '[{"name":"unsafe.name"}]']) {
+    let calls = 0;
+    const provider = new CliProvider({ agent: { id: 'codex', model: null }, spawn: (command, args, opts) => { calls++; return fakeSpawn({ stdout }).spawn(command, args, opts); } });
+    await assert.rejects(provider.complete('p', schema, { itemId: 'i', boardId: 'b', source: null, purpose: 'discovery' }), /MCP configuration/);
+    assert.equal(calls, 1);
+  }
+});

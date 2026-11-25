@@ -1,3 +1,4 @@
+import { browserDiscoveryEnabled, setBrowserDiscovery } from './db/board-options.js';
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyReply } from "fastify";
 import fs from "node:fs";
@@ -491,6 +492,17 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     provider: llm === disabledLlm ? null : describeProvider(config),
   }));
 
+  // Deliberately separate from descriptors and the global settings write API.
+  app.patch<{ Params: { id: string }; Body: { browserDiscovery?: unknown } }>("/api/boards/:id/options", async (req, reply) => {
+    if (!req.body || Object.keys(req.body).length !== 1 || typeof req.body.browserDiscovery !== 'boolean') {
+      reply.status(400); return { error: 'Only a boolean browserDiscovery is accepted' };
+    }
+    const handle = opts.db ?? getDb();
+    try { await setBrowserDiscovery(handle, req.params.id, req.body.browserDiscovery); }
+    catch (err) { reply.status(404); return { error: (err as Error).message }; }
+    return { browserDiscovery: browserDiscoveryEnabled(handle, req.params.id) };
+  });
+
   // Board edit actions (the "Edit board" modal). Creation is via the compose-board /
   // create-board skills; these cover rename + delete-with-cascade.
   app.patch<{ Params: { id: string }; Body: { name?: string; descriptor?: unknown } }>(
@@ -699,6 +711,7 @@ t.addEventListener('input',upd);upd();
         : b.id === LIBRARY_BOARD_ID ? "library"
         : b.view === "grid" ? "inspiration" : "library",
       descriptor: b.descriptor,
+      options: { browserDiscovery: browserDiscoveryEnabled(handle, b.id) },
     }));
   });
 

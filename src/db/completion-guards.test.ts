@@ -80,7 +80,10 @@ test('provider receives trusted optional context; concurrent notes/tags/title/as
   try {
     const work = runEnrichmentForItem(f.handle, { itemId: 'item', llm: p.llm, signal: ctrl.signal });
     await p.entered.promise;
-    assert.deepEqual(p.context(), { itemId: 'item', boardId: 'a', source: 'source-a', signal: ctrl.signal });
+    const context = p.context()!;
+    assert.deepEqual({ itemId: context.itemId, boardId: context.boardId, source: context.source }, { itemId: 'item', boardId: 'a', source: 'source-a' });
+    assert.equal(context.purpose, 'enrichment'); assert.equal(context.discovery, undefined);
+    assert.equal(context.signal?.aborted, false); assert.equal(context.isCurrent?.(), true);
     await patchItemFields(f.handle, 'item', { notes: 'Later notes', annotation: 'Later annotation', favorite: true });
     await tagSkill.run({ itemId: 'item', tags: ['curated'] }, f.ctx);
     await writeItem(f.handle, { ...f.row()!, title: 'Curated title' });
@@ -318,3 +321,25 @@ test('snapshot failed row commit never overwrites bytes referenced by retained a
     assert.equal(readFileSync(join(f.dir, basename(first.asset!.path)), 'utf8'), 'original');
   } finally { f.cleanup(); }
 });
+
+
+for (const mutation of ['opt-out', 'manual-edit'] as const) {
+  test(`discovery ${mutation} cancels lifecycle explicitly instead of stranding processing`, async () => {
+    const { setBrowserDiscovery } = await import('./board-options.js');
+    const f = await fixture(), p = delayedProvider();
+    try {
+      await setBrowserDiscovery(f.handle, 'a', true);
+      const work = runCaptureEnrichJob(f.handle, { itemId: 'item', boardId: 'a', registry: createCaptureRegistry(), llm: p.llm, timeoutFn: never });
+      await p.entered.promise;
+      assert.equal(f.row()!.status, 'processing');
+      if (mutation === 'opt-out') await setBrowserDiscovery(f.handle, 'a', false);
+      else await patchItemFields(f.handle, 'item', { annotation: 'Kept edit' });
+      const afterEdit = f.row();
+      assert.equal(afterEdit!.status, 'error');
+      assert.match(afterEdit!.errorReason!, /cancelled/);
+      p.release.resolve(); await work;
+      assert.deepEqual(f.row(), afterEdit);
+      assert.equal((f.row()!.fields as Record<string, unknown>).summary, undefined);
+    } finally { p.release.resolve(); f.cleanup(); }
+  });
+}

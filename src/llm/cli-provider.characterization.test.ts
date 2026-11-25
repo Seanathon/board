@@ -11,7 +11,8 @@ import {
 // Story 4.3 — CHARACTERIZATION tests. These pin the prototype's EXISTING CLI
 // argv-build + output-parse behavior (NFR-5/C7) so the port into CliProvider is
 // provably behavior-preserving. Unlike TDD, these start GREEN against the current
-// add.ts and must stay green through the refactor.
+// add.ts and must stay green through the refactor. Discovery additionally pins
+// data-only tool restrictions; provider identity and output parsing remain unchanged.
 
 const SCHEMA = { type: 'object', properties: { title: { type: 'string' } } };
 

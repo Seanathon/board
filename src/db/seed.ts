@@ -1,3 +1,4 @@
+import { invalidateBoardLeases } from './item-lease.js';
 import { eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
@@ -164,4 +165,5 @@ export function updateBoardDescriptor(
   const existing = db.select().from(boards).where(eq(boards.id, boardId)).get();
   if (!existing) throw new Error(`Cannot update descriptor: unknown board "${boardId}"`);
   db.update(boards).set({ view: valid.view, descriptor: valid }).where(eq(boards.id, boardId)).run();
+  invalidateBoardLeases(db, boardId);
 }

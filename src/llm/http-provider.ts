@@ -1,6 +1,6 @@
 import { z, type ZodType } from 'zod';
 
-import type { Logger } from '../skills/types.js';
+import type { Logger, CompletionContext } from '../skills/types.js';
 import { LLMSchemaError, LLMTransportError, parseStructuredOutput, type LLMProvider } from './provider.js';
 
 // Story 4.2 — OpenAI-compatible HTTP provider. ONE class for cloud (API key) AND
@@ -58,7 +58,8 @@ export function zodToJsonSchema(schema: ZodType): Record<string, unknown> {
 export class HttpProvider implements LLMProvider {
   constructor(private readonly cfg: HttpProviderConfig) {}
 
-  async complete<T>(prompt: string, schema: ZodType<T>): Promise<T> {
+  async complete<T>(prompt: string, schema: ZodType<T>, context?: CompletionContext): Promise<T> {
+    context?.signal?.throwIfAborted();
     const fetchImpl = this.cfg.fetchImpl ?? globalThis.fetch;
     const logger = this.cfg.logger ?? noopLogger;
     const url = `${this.cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`;
@@ -83,7 +84,7 @@ export class HttpProvider implements LLMProvider {
 
     let res: Response;
     try {
-      res = await fetchImpl(url, { method: 'POST', headers, body });
+      res = await fetchImpl(url, { method: 'POST', headers, body, signal: context?.signal });
     } catch (err) {
       logger.error(`HttpProvider request to ${url} failed: ${(err as Error).message}`);
       throw new LLMTransportError(`HTTP request to provider failed`, { cause: err });
@@ -105,6 +106,7 @@ export class HttpProvider implements LLMProvider {
     if (typeof content !== 'string') {
       throw new LLMSchemaError('Provider response had no message content');
     }
+    context?.signal?.throwIfAborted();
     return parseStructuredOutput(content, schema);
   }
 }

@@ -304,6 +304,14 @@ function setItemStatusDirect(handle: DbHandle, id: string, status: ItemStatus, e
   }
 }
 
+/** Called by an explicit edit/opt-out inside the serialized write transaction. */
+export function interruptItemJobDirect(handle: DbHandle, id: string, reason: string): void {
+  invalidateItemLease(handle, id);
+  const row = handle.db.select().from(items).where(eq(items.id, id)).get();
+  // The edit owns cancellation; an invalidated old job can no longer settle status.
+  if (row && ['pending', 'processing'].includes(row.status)) setItemStatusDirect(handle, id, 'error', reason);
+}
+
 /**
  * Map a thrown error to a SHORT, user-safe `error_reason` — never a raw stack or
  * secret-bearing string (NFR-3; rendered by Story 8.5). Classified by error name so

@@ -1,3 +1,5 @@
+import { browserDiscoveryEnabled } from './board-options.js';
+import { interruptItemJobDirect } from './queue.js';
 import { eq } from 'drizzle-orm';
 import { boards, items, type Item } from './schema.js';
 import type { DbHandle } from './index.js';
@@ -5,6 +7,13 @@ import type { DbHandle } from './index.js';
 // Process/connection-local only: all asynchronous app writers use this lease.
 // Direct SQL from other processes is NOT protected against ABA by this mechanism.
 const generations = new WeakMap<object, Map<string, symbol>>();
+const boardRevisions = new WeakMap<object, Map<string, symbol>>();
+/** Schema writers call this even for a same-value edit, defeating descriptor ABA. */
+export function invalidateBoardLeases(db: object, boardId: string): void {
+  let revisions = boardRevisions.get(db);
+  if (!revisions) { revisions = new Map(); boardRevisions.set(db, revisions); }
+  revisions.set(boardId, Symbol());
+}
 const signalLeases = new WeakMap<AbortSignal, ItemLease>();
 export function bindItemLease(signal: AbortSignal, lease: ItemLease | undefined): void {
   if (lease) signalLeases.set(signal, lease);
@@ -16,6 +25,7 @@ export interface ItemLease {
   readonly item: Item;
   readonly descriptor: string;
   readonly token: symbol;
+  readonly boardRevision?: symbol;
 }
 function tokens(handle: DbHandle): Map<string, symbol> {
   let map = generations.get(handle.sqlite);
@@ -36,11 +46,11 @@ export function beginItemLease(handle: DbHandle, id: string, supersede = true): 
   if (!board) return undefined;
   const token = (!supersede && tokens(handle).get(id)) || Symbol();
   tokens(handle).set(id, token);
-  return { item, descriptor: JSON.stringify(board.descriptor), token };
+  return { item, descriptor: JSON.stringify(board.descriptor), token, boardRevision: boardRevisions.get(handle.db)?.get(item.boardId) };
 }
 /** Call inside the synchronous write operation, never across an await. */
 export function currentLeaseItem(handle: DbHandle, lease: ItemLease | undefined, signal?: AbortSignal): Item | undefined {
-  if (!lease || signal?.aborted || tokens(handle).get(lease.item.id) !== lease.token) return undefined;
+  if (!lease || signal?.aborted || tokens(handle).get(lease.item.id) !== lease.token || boardRevisions.get(handle.db)?.get(lease.item.boardId) !== lease.boardRevision) return undefined;
   const fresh = handle.db.select().from(items).where(eq(items.id, lease.item.id)).get();
   if (!fresh || fresh.boardId !== lease.item.boardId || fresh.source !== lease.item.source || fresh.createdAt !== lease.item.createdAt) return undefined;
   const board = handle.db.select().from(boards).where(eq(boards.id, fresh.boardId)).get();
@@ -62,6 +72,12 @@ export function markManualFields(handle: DbHandle, id: string, keys: string[]): 
   let fields = byItem.get(id);
   if (!fields) { fields = new Map(); byItem.set(id, fields); }
   for (const key of keys) fields.set(key, Symbol());
+  // Discovery observes the whole item, not only the eventual output keys. Manual
+  // intent invalidates its status/adoption too, including a same-value edit.
+  if (keys.length) {
+    const item = handle.db.select().from(items).where(eq(items.id, id)).get();
+    if (item && browserDiscoveryEnabled(handle, item.boardId)) interruptItemJobDirect(handle, id, 'analysis cancelled after edit');
+  }
 }
 export function manualFieldUnchanged(handle: DbHandle, id: string, before: Map<string, symbol>, key: string): boolean {
   return before.get(key) === manualRevisions.get(handle.sqlite)?.get(id)?.get(key);

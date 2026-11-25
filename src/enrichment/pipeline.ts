@@ -51,6 +51,7 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
   if (!item || item.boardId !== args.boardId || (typeof args.source === 'string' && item.source !== args.source)) {
     return Promise.resolve({ type: 'capture', ok: false, error: 'Item changed before job admission' });
   }
+  let enrichment: Promise<void> | undefined;
   let captureTeardown: (() => Promise<void>) | undefined;
   const canCapture =
     !!args.source &&
@@ -80,9 +81,14 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
       // Cheap tier (Inbox): skip the enrich hop entirely so llm.complete is never
       // reached — the AI takeaway is earned on assignment (Epic 14), not on capture.
       if (args.tier !== 'cheap' && currentLeaseItem(handle, lease, signal)) {
-        await runEnrichmentForItem(handle, { itemId: args.itemId, llm: args.llm, signal, lease });
+        enrichment = runEnrichmentForItem(handle, { itemId: args.itemId, llm: args.llm, signal, lease });
+        await enrichment;
       }
     },
-    teardown: async () => { if (captureTeardown) await captureTeardown(); },
+    teardown: async () => {
+      if (captureTeardown) await captureTeardown();
+      // A timeout publishes status early, but the original lane owns disposal.
+      if (enrichment) await enrichment.catch(() => {});
+    },
   });
 }

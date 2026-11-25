@@ -1,3 +1,4 @@
+import { deleteBoardOptions } from './board-options.js';
 import { eq } from 'drizzle-orm';
 
 import { boards, items } from './schema.js';
@@ -41,6 +42,7 @@ export async function deleteBoardCascade(
     files += res.filesRemoved;
   }
   await enqueueTransaction(handle, () => {
+    deleteBoardOptions(handle, boardId);
     handle.db.delete(boards).where(eq(boards.id, boardId)).run();
   });
   return { deleted: true, items: itemRows.length, files };

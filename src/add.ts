@@ -416,13 +416,14 @@ export function buildAnalysisCommand(
   prompt: string,
   schema: object,
   systemPrompt: string,
-  files?: { schemaFile?: string; resultFile?: string }
+  files?: { schemaFile?: string; resultFile?: string; dataOnly?: boolean; disabledMcpServers?: string[] }
 ) {
   if (agent.id === "claude") {
     const args = [
       "-p", prompt,
       "--tools", "",
       "--output-format", "json",
+      ...(files?.dataOnly ? ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}'] : []),
       "--json-schema", JSON.stringify(schema),
       "--append-system-prompt", systemPrompt,
     ];
@@ -436,8 +437,19 @@ export function buildAnalysisCommand(
     }
     const args = [
       "--ask-for-approval", "never",
+      // Scope new restrictions to discovery and its evidence-bearing enrichment.
+      ...(files.dataOnly ? [
+        ...['shell_tool', 'unified_exec', 'code_mode', 'code_mode_host', 'browser_use', 'browser_use_external', 'in_app_browser', 'computer_use', 'apps', 'multi_agent', 'multi_agent_v2', 'image_generation', 'view_image', 'skill_search', 'skill_mcp_dependency_install', 'tool_suggest', 'sleep_tool'].flatMap(feature => ['-c', `features.${feature}=false`]),
+        "-c", "features.skip_host_skill_discovery=true", "-c", 'web_search="disabled"',
+        // An empty MCP table merges with inherited configuration; disable each entry.
+        ...(files.disabledMcpServers ?? []).flatMap(name => {
+          if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new Error('Unsupported MCP server name for data-only completion');
+          return ['-c', `mcp_servers.${name}.enabled=false`];
+        }),
+      ] : []),
       "exec",
       "--ephemeral",
+      ...(files.dataOnly ? ["--skip-git-repo-check"] : []),
       "--sandbox", "read-only",
       "--output-schema", files.schemaFile,
       "--output-last-message", files.resultFile,

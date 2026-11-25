@@ -35,6 +35,11 @@ export interface CompletionContext {
   boardId: string;
   source: string | null;
   signal?: AbortSignal;
+  /** Trusted application routing, never inferred from page text or the prompt. */
+  purpose?: 'enrichment' | 'discovery';
+  discovery?: { sources: Array<{ url: string; text: string; kind: 'captured' | 'static' | 'browser' }>; errors: string[] };
+  /** Synchronous proof for providers that adopt atomically themselves. */
+  isCurrent?: () => boolean;
 }
 
 export interface LLMProvider {
