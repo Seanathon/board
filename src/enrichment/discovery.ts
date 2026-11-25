@@ -3,7 +3,7 @@ import { JSDOM } from 'jsdom';
 import { z } from 'zod';
 import type { BoardDescriptor } from '../descriptor/types.js';
 import type { CompletionContext, LLMProvider } from '../skills/types.js';
-import { abortable, createDiscoveryReader, decodeDiscoveryText, discoveryUrl, type DiscoveryReader } from './discovery-net.js';
+import { abortable, createDiscoveryReader, decodeDiscoveryText, discoveryUrl, DISCOVERY_TIME_BUDGET_MS, type DiscoveryReader } from './discovery-net.js';
 import { openDiscoveryBrowser, safeDiscoveryLabel, isDiscoveryChallenge, type DiscoveryBrowser, type DiscoveryCandidate } from './discovery-browser.js';
 
 export type DiscoveryEvidence = NonNullable<CompletionContext['discovery']>;
@@ -21,7 +21,7 @@ export async function discoverEvidence(args: {
   if (!args.enabled || !args.context.source) return evidence;
   const controller = new AbortController();
   const signal = AbortSignal.any([controller.signal, ...(args.context.signal ? [args.context.signal] : [])]);
-  const timer = setTimeout(() => controller.abort(new Error('Discovery time budget exhausted')), args.timeoutMs ?? 45_000);
+  const timer = setTimeout(() => controller.abort(new Error('Discovery time budget exhausted')), args.timeoutMs ?? DISCOVERY_TIME_BUDGET_MS);
   let browser: DiscoveryBrowser | undefined;
   let completion: Promise<unknown> | undefined;
   let textLeft = 24_000;

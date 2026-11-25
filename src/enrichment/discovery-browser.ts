@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { Browser, ElementHandle, HTTPRequest } from 'puppeteer-core';
 import { launchBrowser } from '../browser.js';
 import { createBrowserTeardown, type TeardownBrowser } from '../capture/teardown.js';
-import { abortable, discoveryUrl, type DiscoveryReader } from './discovery-net.js';
+import { abortable, discoveryUrl, DISCOVERY_LAUNCH_TIMEOUT_MS, type DiscoveryReader } from './discovery-net.js';
 
 export interface DiscoveryCandidate { id: string; label: string; url?: string }
 export interface DiscoverySnapshot { url: string; text: string; candidates: DiscoveryCandidate[] }
@@ -35,7 +35,7 @@ export async function openDiscoveryBrowser(args: {
   const flags = [`--proxy-server=http://127.0.0.1:${port}`, '--proxy-bypass-list=<-loopback>', '--disable-quic', '--disable-background-networking', '--disable-component-update', '--disable-sync', '--no-first-run', '--disable-extensions', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'];
   const launch = Promise.resolve().then(() => {
     args.signal.throwIfAborted();
-    return (args.launch ?? ((extraArgs) => launchBrowser({ extraArgs, timeoutMs: 10_000 })))(flags);
+    return (args.launch ?? ((extraArgs) => launchBrowser({ extraArgs, timeoutMs: DISCOVERY_LAUNCH_TIMEOUT_MS })))(flags);
   });
   const kill = new AbortController();
   const teardown = createBrowserTeardown(launch as unknown as Promise<TeardownBrowser>, kill.signal);

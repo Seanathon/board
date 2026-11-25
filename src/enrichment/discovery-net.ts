@@ -16,6 +16,16 @@ export function publicAddress(address: string): boolean {
   return family === 4 ? !reserved.check(address, 'ipv4') : family === 6 && global6.check(address, 'ipv6') && !reserved.check(address, 'ipv6');
 }
 const unsafePath = /(?:^|[\W_])(login|logout|signin|signout|signup|register|auth|oauth|checkout|cart|purchase|subscribe|unsubscribe|delete|remove|download|export|captcha|challenge)(?:[\W_]|$)/i;
+/** Whole-discovery wall-clock budget: reads, model decisions and browser work together. */
+export const DISCOVERY_TIME_BUDGET_MS = 45_000;
+/**
+ * How long Chromium gets to start and print its DevTools endpoint. A cold start on a
+ * loaded CT or a shared CI runner can take 10s or more (a 10s limit flaked in CI, where
+ * the passing run took 12s), so this is twice that. It must stay well inside the budget:
+ * the budget's abort still cuts a stuck launch short.
+ */
+export const DISCOVERY_LAUNCH_TIMEOUT_MS = 20_000;
+
 export function discoveryUrl(raw: string, publisher: string): URL {
   const url = new URL(raw, publisher), root = new URL(publisher);
   // Product-owned documentation commonly lives beneath the saved hostname.

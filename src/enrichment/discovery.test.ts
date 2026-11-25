@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { launchBrowser } from '../browser.js';
 import { discoverEvidence } from './discovery.js';
 import { openDiscoveryBrowser, type DiscoveryBrowser } from './discovery-browser.js';
-import { createDiscoveryReader, discoveryUrl, publicAddress, type DiscoveryReader } from './discovery-net.js';
+import { createDiscoveryReader, discoveryUrl, publicAddress, DISCOVERY_LAUNCH_TIMEOUT_MS, DISCOVERY_TIME_BUDGET_MS, type DiscoveryReader } from './discovery-net.js';
 import type { LLMProvider } from '../skills/types.js';
 import type { BoardDescriptor } from '../descriptor/types.js';
 
@@ -129,7 +129,7 @@ test('network request and byte budgets fail closed', async () => {
   await assert.rejects(createDiscoveryReader(source, new AbortController().signal, { maxBytes: 10, lookup: async () => [{ address: '93.184.216.34', family: 4 }], request })(source), /byte budget/);
 });
 
-test('real browser reads Tutorial modal behind a >12k graph body, then sitemap docs, with unsafe egress blocked', { timeout: 30_000 }, async () => {
+test('real browser reads Tutorial modal behind a >12k graph body, then sitemap docs, with unsafe egress blocked', { timeout: DISCOVERY_LAUNCH_TIMEOUT_MS + 40_000 }, async () => {
   let forbiddenHits = 0;
   const fixture = http.createServer((req, res) => {
     if (req.url === '/forbidden') forbiddenHits++;
@@ -169,7 +169,7 @@ test('real browser reads Tutorial modal behind a >12k graph body, then sitemap d
   } };
   try {
     const evidence = await discoverEvidence({ ...base, capturedText: 'Graph node Demo label Menu example. '.repeat(300), llm: exploreExisting(llm), read, openBrowser: args => openDiscoveryBrowser({ ...args, launch: async extraArgs => {
-      const browser = await launchBrowser({ extraArgs, timeoutMs: 10_000 });
+      const browser = await launchBrowser({ extraArgs, timeoutMs: DISCOVERY_LAUNCH_TIMEOUT_MS });
       try {
         // An un-intercepted target must not bypass the proxy, even for loopback.
         const rogue = await browser.newPage();
@@ -357,4 +357,11 @@ test('real browser follows first-party new-tab Tutorial links and reads inline M
     assert.equal(docs.url, target);
     assert(docs.text.includes('Documentation explains the workflow.'));
   } finally { await browser.dispose(); }
+});
+
+test('the browser launch timeout leaves most of the discovery budget for the actual discovery', () => {
+  // A cold Chromium start flaked at 10s on CI, so the launch limit was raised; it must not
+  // grow so far that a slow launch could consume the whole budget.
+  assert(DISCOVERY_LAUNCH_TIMEOUT_MS >= 15_000, 'too tight for a cold start on a loaded host');
+  assert(DISCOVERY_LAUNCH_TIMEOUT_MS <= DISCOVERY_TIME_BUDGET_MS / 2, 'a slow launch could eat the whole discovery budget');
 });
