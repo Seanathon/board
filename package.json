@@ -21,7 +21,8 @@
     "archive:backfill": "tsx src/db/archive-backfill-cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test --test-concurrency=1 \"src/**/*.test.ts\" \"extension/**/*.test.ts\"",
-    "release:source": "node scripts/release-source.mjs"
+    "release:source": "node scripts/release-source.mjs",
+    "replay:enrichment": "tsx src/enrichment/replay-cli.ts"
   },
   "dependencies": {
     "@fastify/cors": "11.2.0",
