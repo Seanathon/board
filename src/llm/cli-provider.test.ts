@@ -72,7 +72,7 @@ describe('CliProvider (Story 4.3)', () => {
   // AC 3 — non-zero exit → LLMTransportError
   it('throws LLMTransportError on a non-zero exit', async () => {
     const f = fakeSpawn({ stderr: 'boom', code: 1 });
-    const provider = new CliProvider({ agent: { id: 'claude', model: null }, spawn: f.spawn, timeoutMs: 1000 });
+    const provider = new CliProvider({ agent: { id: 'claude', model: null }, spawn: f.spawn, timeoutMs: 1000, retryDelayMs: 0 });
     await assert.rejects(() => provider.complete('p', schema), (e: unknown) => e instanceof LLMTransportError);
   });
 
@@ -81,7 +81,7 @@ describe('CliProvider (Story 4.3)', () => {
     const logged: string[] = [];
     const logger = { info: () => {}, warn: () => {}, error: (m: string) => logged.push(m) };
     const f = fakeSpawn({ stderr: 'kaboom-detail', code: 2 });
-    const provider = new CliProvider({ agent: { id: 'claude', model: null }, spawn: f.spawn, timeoutMs: 1000, logger });
+    const provider = new CliProvider({ agent: { id: 'claude', model: null }, spawn: f.spawn, timeoutMs: 1000, logger, retryDelayMs: 0 });
     await assert.rejects(() => provider.complete('p', schema), (e: unknown) => e instanceof LLMTransportError);
     assert.ok(logged.some((l) => l.includes('kaboom-detail')), 'stderr should be captured + logged');
   });
@@ -170,4 +170,75 @@ it('Codex discovery refuses malformed MCP inventories before starting inference'
     await assert.rejects(provider.complete('p', schema, { itemId: 'i', boardId: 'b', source: null, purpose: 'discovery' }), /MCP configuration/);
     assert.equal(calls, 1);
   }
+});
+
+describe('CliProvider transient retry', () => {
+  // A spawner whose Nth call (0-based) exits with codes[N]; stdout only on a zero exit.
+  function sequenced(codes: number[], stdout = '{"title":"ok","n":1}') {
+    let calls = 0;
+    const spawn: SpawnFn = () => {
+      const code = codes[Math.min(calls++, codes.length - 1)];
+      const child: CliChild = {
+        stdout: { on: (ev, cb) => { if (ev === 'data' && code === 0) queueMicrotask(() => cb(Buffer.from(stdout))); } },
+        stderr: { on: (ev, cb) => { if (ev === 'data' && code !== 0) queueMicrotask(() => cb(Buffer.from('rate limited'))); } },
+        on: (ev, cb) => { if (ev === 'close') queueMicrotask(() => (cb as (c: number) => void)(code)); },
+        kill: () => {},
+      };
+      return child;
+    };
+    return { spawn, calls: () => calls };
+  }
+  const make = (spawn: SpawnFn, extra: object = {}, logger?: { info(): void; warn(m: string): void; error(): void }) =>
+    new CliProvider({ agent: { id: 'claude', model: null }, spawn, timeoutMs: 1000, retryDelayMs: 0, logger, ...extra });
+
+  it('retries once after a non-zero exit and succeeds', async () => {
+    const warned: string[] = [];
+    const f = sequenced([1, 0]);
+    const out = await make(f.spawn, {}, { info() {}, warn: (m) => warned.push(m), error() {} }).complete('p', schema);
+    assert.deepEqual(out, { title: 'ok', n: 1 });
+    assert.equal(f.calls(), 2);
+    assert.ok(warned.some((w) => /retrying \(1\/1\).*rate limited/.test(w)));
+  });
+
+  it('gives up after the retry budget and still throws LLMTransportError', async () => {
+    const f = sequenced([1, 1, 1]);
+    await assert.rejects(() => make(f.spawn).complete('p', schema), (e: unknown) => e instanceof LLMTransportError);
+    assert.equal(f.calls(), 2, 'one attempt plus exactly one retry');
+  });
+
+  it('transientRetries: 0 disables the retry', async () => {
+    const f = sequenced([1, 0]);
+    await assert.rejects(() => make(f.spawn, { transientRetries: 0 }).complete('p', schema), LLMTransportError);
+    assert.equal(f.calls(), 1);
+  });
+
+  it('does not retry a schema failure (the model answered; a second call costs money and may repeat it)', async () => {
+    const f = sequenced([0], 'not json');
+    await assert.rejects(() => make(f.spawn).complete('p', schema), LLMSchemaError);
+    assert.equal(f.calls(), 1);
+  });
+
+  it('does not retry a timeout', async () => {
+    let calls = 0;
+    const spawn: SpawnFn = () => {
+      calls++;
+      return {
+        stdout: { on() {} }, stderr: { on() {} },
+        on() {}, // never closes
+        kill() {},
+      } as CliChild;
+    };
+    const p = new CliProvider({ agent: { id: 'claude', model: null }, spawn, timeoutMs: 20, retryDelayMs: 0 });
+    await assert.rejects(() => p.complete('p', schema), (e: unknown) => e instanceof LLMTransportError && /timed out/.test((e as Error).message));
+    assert.equal(calls, 1);
+  });
+
+  it('stops waiting to retry when the caller aborts', async () => {
+    const f = sequenced([1, 0]);
+    const ac = new AbortController();
+    const p = make(f.spawn, { retryDelayMs: 10_000 }).complete('p', schema, { signal: ac.signal } as never);
+    setTimeout(() => ac.abort(new Error('superseded')), 20);
+    await assert.rejects(p, /superseded/);
+    assert.equal(f.calls(), 1);
+  });
 });

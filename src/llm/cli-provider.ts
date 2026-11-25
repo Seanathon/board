@@ -50,6 +50,14 @@ export interface CliProviderConfig {
   /** Wall-clock timeout (ms) before the child is killed. */
   timeoutMs?: number;
   logger?: Logger;
+  /**
+   * Extra attempts after the agent RAN and exited non-zero (rate limits and upstream
+   * 5xx surface this way). Default 1. Never applied to timeouts, aborts, spawn
+   * failures or output-bound breaches: those are deterministic or already costly.
+   */
+  transientRetries?: number;
+  /** Pause before a retry (ms). Default 2000; tests pass 0. */
+  retryDelayMs?: number;
 }
 
 // Wall-clock ceiling for one agent subprocess. Generous on purpose: a self-hosted,
@@ -70,6 +78,17 @@ interface ProcessResult {
   code: number;
   stdout: string;
   stderr: string;
+}
+
+/** Abortable pause between retry attempts. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(timer); reject(signal!.reason ?? new Error('Aborted')); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /** Run a child to completion with a wall-clock timeout that kills it. */
@@ -168,8 +187,18 @@ export class CliProvider implements LLMProvider {
         schemaFile, resultFile, dataOnly, disabledMcpServers,
       });
 
-      const { code, stdout, stderr } = await runProcess(spawnFn, command, args, tempDir, timeoutMs, context?.signal);
+      const retries = Math.max(0, this.cfg.transientRetries ?? 1);
+      let attempt = 0;
+      let run = await runProcess(spawnFn, command, args, tempDir, timeoutMs, context?.signal);
       context?.signal?.throwIfAborted();
+      while (run.code !== 0 && attempt < retries) {
+        attempt++;
+        logger.warn(`CLI agent "${command}" exited ${run.code}; retrying (${attempt}/${retries}): ${run.stderr.slice(0, 200)}`);
+        await sleep(this.cfg.retryDelayMs ?? 2_000, context?.signal);
+        run = await runProcess(spawnFn, command, args, tempDir, timeoutMs, context?.signal);
+        context?.signal?.throwIfAborted();
+      }
+      const { code, stdout, stderr } = run;
       if (code !== 0) {
         logger.error(`CLI agent "${command}" exited ${code}: ${stderr.slice(0, 500)}`);
         throw new LLMTransportError(`CLI agent "${command}" exited ${code}`);
