@@ -20,7 +20,8 @@
     "import:flat": "tsx src/db/import-cli.ts",
     "archive:backfill": "tsx src/db/archive-backfill-cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-concurrency=1 \"src/**/*.test.ts\" \"extension/**/*.test.ts\""
+    "test": "node --import tsx --test --test-concurrency=1 \"src/**/*.test.ts\" \"extension/**/*.test.ts\"",
+    "release:source": "node scripts/release-source.mjs"
   },
   "dependencies": {
     "@fastify/cors": "11.2.0",
