@@ -1068,3 +1068,21 @@ test("POST /api/collections/:cid/items/:id/retry accepts a failed item and retur
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("GET /api/health/jobs reports rolling per-board outcomes (counts only)", async () => {
+  const { createJobHealthMonitor, setJobHealthMonitor } = await import("./db/job-health.js");
+  const monitor = createJobHealthMonitor({ window: 10, minJobs: 2, threshold: 0.5, warn() {}, info() {} });
+  monitor.record("library", true);
+  monitor.record("library", false);
+  setJobHealthMonitor(monitor);
+  const { app, handle, dir } = await seededSqliteApp();
+  try {
+    const res = await app.inject({ method: "GET", url: "/api/health/jobs" });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(JSON.parse(res.body), { boards: [{ boardId: "library", jobs: 2, failures: 1, failureRate: 0.5, alerting: true }] });
+  } finally {
+    setJobHealthMonitor(undefined);
+    handle.sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

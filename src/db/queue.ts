@@ -1,5 +1,6 @@
 import { bindItemLease, beginItemLease, currentLeaseItem, invalidateItemLease, type ItemLease } from './item-lease.js';
 import { describeJobError, failureRawOutput, failureStage, reportJobFailure } from './job-failures.js';
+import { jobHealth } from './job-health.js';
 import { eq, sql } from 'drizzle-orm';
 
 import { assets, boards, items, type NewAsset, type NewItem } from './schema.js';
@@ -294,6 +295,7 @@ function setItemStatusDirect(handle: DbHandle, id: string, status: ItemStatus, e
   // Story 5.3: publish the transition for live SSE. `fields` is included on `done`
   // so the client renders the filled card without a refetch (8.4 contract).
   const row = handle.db.select().from(items).where(eq(items.id, id)).get();
+  if (row && (status === 'done' || status === 'error')) jobHealth().record(row.boardId, status === 'error');
   if (row) {
     statusHub.publish({
       itemId: id,

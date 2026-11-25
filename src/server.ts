@@ -30,6 +30,8 @@ import { assignItems } from "./enrichment/assign.js";
 import { archiveFootprint } from "./db/archive-footprint.js";
 import { createRegistry, registerAllSkills, type SkillRegistry } from "./skills/registry.js";
 import { createFileFailureSink, setJobFailureSink } from "./db/job-failures.js";
+import { jobHealth } from "./db/job-health.js";
+import { installConsoleFileLog } from "./logging.js";
 import { buildCtx, type JobQueue, type LLMProvider, type Logger } from "./skills/types.js";
 import { selectProvider, describeProvider } from "./llm/select-provider.js";
 import { disabledLlm } from "./skills/types.js";
@@ -583,6 +585,9 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   // write → systemd restart loop). A DB-reachable check, if ever wanted, is a separate
   // /readyz. Used by the systemd unit + the container healthcheck (Story 11.2).
   app.get("/healthz", async () => ({ ok: true }));
+  // Rolling per-board job outcomes (counts only; no item data). `alerting` mirrors the
+  // ALERT log line, so a poller can use either.
+  app.get("/api/health/jobs", async () => ({ boards: jobHealth().snapshot() }));
 
   // Story 16.3 — read-only archive footprint ({totalBytes,count} over kind='snapshot'
   // files). Surfaced for settings/board-info so "no storage limit" is never a silent
@@ -967,6 +972,12 @@ t.addEventListener('input',upd);upd();
 // Entrypoint guard — only listen when run directly
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   ensureDataDir(); // Story 2.2: create DATA_DIR + screenshots on real boot (AC 2)
+  // Keep a rotated copy of the console under DATA_DIR/logs (BOARD_LOG_FILE=off disables
+  // it; any other value is the file path). stdout may be a socket, so this is the log
+  // an operator can actually read after a failure.
+  if (process.env.BOARD_LOG_FILE !== "off") {
+    installConsoleFileLog({ file: process.env.BOARD_LOG_FILE || path.join(config.dataDir, "logs", "board-oss.log") });
+  }
   // Story 1.2/8.6: idempotently seed the boards on EVERY boot so a fresh DATA_DIR
   // (container / LXC first-run) has the Inspiration + Library boards — without this,
   // zero-config first-run (UJ-3/SM-1) and any add-item/capture 500 with "unknown board".
