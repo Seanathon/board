@@ -17,9 +17,9 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readdirSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const git = (repo, args, options = {}) => execFileSync('git', ['-C', repo, ...args], { maxBuffer: 256 * 1024 * 1024, ...options });
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -60,7 +60,12 @@ export function exportCommit({ repo, ref, outDir, requirePushed = false, remote 
   return manifest;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Compare REAL paths: a symlinked invocation path (macOS /var -> /private/var, a linked checkout)
+// must still run the CLI instead of silently doing nothing.
+const invokedDirectly = (() => {
+  try { return !!process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href; } catch { return false; }
+})();
+if (invokedDirectly) {
   const args = process.argv.slice(2);
   const value = (flag) => { const i = args.indexOf(flag); return i === -1 ? undefined : args[i + 1]; };
   const ref = value('--commit');

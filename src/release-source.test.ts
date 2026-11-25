@@ -2,9 +2,10 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { exportCommit, buildSha256 } from '../scripts/release-source.mjs';
 
@@ -80,5 +81,15 @@ describe('release-source: build a release from a commit, not the working tree', 
     git(r2, 'add', '-A');
     git(r2, 'commit', '-q', '-m', 'link');
     assert.throws(() => exportCommit({ repo: r2, ref: 'HEAD', outDir: join(root, 'sym') }), /Unsupported tree entry/);
+  });
+
+  it('the CLI runs when invoked through a symlinked path (it used to exit 0 and do nothing)', () => {
+    const real = fileURLToPath(new URL('../scripts/release-source.mjs', import.meta.url));
+    const link = join(root, 'linked-release-source.mjs');
+    symlinkSync(real, link);
+    const out = join(root, 'cli-out');
+    const stdout = execFileSync(process.execPath, [link, '--commit', 'HEAD', '--out', out], { cwd: repo, stdio: 'pipe' }).toString();
+    assert.equal(JSON.parse(stdout).commit, committed);
+    assert.ok(existsSync(join(out, 'manifest.json')));
   });
 });
