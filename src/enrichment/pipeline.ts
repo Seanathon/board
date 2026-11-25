@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { items } from '../db/schema.js';
 import { currentLeaseItem } from '../db/item-lease.js';
+import { inStage } from '../db/job-failures.js';
 import { runItemJob, type JobResult, type TimeoutFn } from '../db/queue.js';
 import { runCaptureForItem, type CaptureRegistry, type CaptureSource } from '../capture/adapter.js';
 import { runEnrichmentForItem } from './worker.js';
@@ -51,6 +52,7 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
   if (!item || item.boardId !== args.boardId || (typeof args.source === 'string' && item.source !== args.source)) {
     return Promise.resolve({ type: 'capture', ok: false, error: 'Item changed before job admission' });
   }
+  let enrichment: Promise<void> | undefined;
   let captureTeardown: (() => Promise<void>) | undefined;
   const canCapture =
     !!args.source &&
@@ -67,7 +69,7 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
       const current = currentLeaseItem(handle, lease, signal);
       if (!current || current.boardId !== args.boardId || (typeof args.source === 'string' && current.source !== args.source)) return;
       if (canCapture) {
-        await runCaptureForItem(handle, args.registry, {
+        await inStage('capture', () => runCaptureForItem(handle, args.registry, {
           itemId: args.itemId,
           boardId: args.boardId,
           source: args.source as CaptureSource,
@@ -75,14 +77,19 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
           lease,
           screenshotsDir: args.screenshotsDir,
           registerTeardown: (fn) => { captureTeardown = fn; },
-        });
+        }));
       }
       // Cheap tier (Inbox): skip the enrich hop entirely so llm.complete is never
       // reached — the AI takeaway is earned on assignment (Epic 14), not on capture.
       if (args.tier !== 'cheap' && currentLeaseItem(handle, lease, signal)) {
-        await runEnrichmentForItem(handle, { itemId: args.itemId, llm: args.llm, signal, lease });
+        enrichment = runEnrichmentForItem(handle, { itemId: args.itemId, llm: args.llm, signal, lease });
+        await enrichment;
       }
     },
-    teardown: async () => { if (captureTeardown) await captureTeardown(); },
+    teardown: async () => {
+      if (captureTeardown) await captureTeardown();
+      // A timeout publishes status early, but the original lane owns disposal.
+      if (enrichment) await enrichment.catch(() => {});
+    },
   });
 }

@@ -1,4 +1,6 @@
 import { bindItemLease, beginItemLease, currentLeaseItem, invalidateItemLease, type ItemLease } from './item-lease.js';
+import { describeJobError, failureRawOutput, failureStage, reportJobFailure } from './job-failures.js';
+import { jobHealth } from './job-health.js';
 import { eq, sql } from 'drizzle-orm';
 
 import { assets, boards, items, type NewAsset, type NewItem } from './schema.js';
@@ -293,6 +295,7 @@ function setItemStatusDirect(handle: DbHandle, id: string, status: ItemStatus, e
   // Story 5.3: publish the transition for live SSE. `fields` is included on `done`
   // so the client renders the filled card without a refetch (8.4 contract).
   const row = handle.db.select().from(items).where(eq(items.id, id)).get();
+  if (row && (status === 'done' || status === 'error')) jobHealth().record(row.boardId, status === 'error');
   if (row) {
     statusHub.publish({
       itemId: id,
@@ -304,19 +307,33 @@ function setItemStatusDirect(handle: DbHandle, id: string, status: ItemStatus, e
   }
 }
 
+/** Called by an explicit edit/opt-out inside the serialized write transaction. */
+export function interruptItemJobDirect(handle: DbHandle, id: string, reason: string): void {
+  invalidateItemLease(handle, id);
+  const row = handle.db.select().from(items).where(eq(items.id, id)).get();
+  // The edit owns cancellation; an invalidated old job can no longer settle status.
+  if (row && ['pending', 'processing'].includes(row.status)) setItemStatusDirect(handle, id, 'error', reason);
+}
+
 /**
  * Map a thrown error to a SHORT, user-safe `error_reason` — never a raw stack or
  * secret-bearing string (NFR-3; rendered by Story 8.5). Classified by error name so
  * the storage layer stays decoupled from llm/.
+ *
+ * `SyntaxError` / `ZodError` are the model's own output failing to parse or validate
+ * (enrichment is the only place they surface here), so they share the existing
+ * "AI returned invalid output" reason instead of the uninformative "processing failed".
  */
 export function cleanErrorReason(err: unknown): string {
   const name = (err as { name?: string })?.name;
   if (name === 'LLMTransportError') return 'could not reach the AI provider';
-  if (name === 'LLMSchemaError') return 'AI returned invalid output';
+  if (name === 'LLMSchemaError' || name === 'SyntaxError' || name === 'ZodError') return 'AI returned invalid output';
   const msg = String((err as Error)?.message ?? '');
   if (/timed out|timeout/i.test(msg)) return 'timed out';
   return 'processing failed';
 }
+
+export { describeJobError };
 
 export interface RunItemJobArgs {
   itemId: string;
@@ -325,6 +342,8 @@ export interface RunItemJobArgs {
   work: (signal: AbortSignal, lease?: ItemLease) => Promise<void> | void;
   teardown?: (signal: AbortSignal) => Promise<void>;
   timeoutFn?: TimeoutFn;
+  /** Where failure detail is logged (default: console). The UI only ever sees the clean reason. */
+  logger?: { error(message: string): void };
 }
 
 /**
@@ -370,7 +389,23 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
         if (err instanceof EnrichmentDisabledError) {
           setItemStatusDirect(handle, args.itemId, 'done', null); // disabled = done, not error
         } else {
-          setItemStatusDirect(handle, args.itemId, 'error', cleanErrorReason(err));
+          const reason = cleanErrorReason(err);
+          (args.logger ?? console).error(`item ${args.itemId} (${args.type}) failed: ${describeJobError(err)}`);
+          const described = describeJobError(err);
+          const split = described.indexOf(': ');
+          reportJobFailure(
+            {
+              at: new Date().toISOString(),
+              itemId: args.itemId,
+              jobType: args.type,
+              stage: failureStage(err),
+              name: described.slice(0, split),
+              message: described.slice(split + 2),
+              category: reason,
+            },
+            failureRawOutput(err),
+          );
+          setItemStatusDirect(handle, args.itemId, 'error', reason);
         }
         // swallowed: the terminal status is recorded; the job itself "succeeded" at
         // managing status.
@@ -390,7 +425,18 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
   // terminal error status through the writer so the item is never stuck.
   if (result.timedOut) {
     await enqueueWrite(() => {
-      if (currentLeaseItem(handle, lease)) setItemStatusDirect(handle, args.itemId, 'error', 'timed out');
+      if (currentLeaseItem(handle, lease)) {
+        reportJobFailure({
+          at: new Date().toISOString(),
+          itemId: args.itemId,
+          jobType: args.type,
+          stage: 'timeout',
+          name: 'TimeoutError',
+          message: `job exceeded ${args.timeoutMs}ms`,
+          category: 'timed out',
+        });
+        setItemStatusDirect(handle, args.itemId, 'error', 'timed out');
+      }
     });
   }
   return result;

@@ -131,10 +131,12 @@ test("toCodexOutputSchema makes nested object schemas strict", () => {
 test("buildAnalysisCommand constructs Claude command with disabled tools and schema", () => {
   const schema = { type: "object", properties: { title: { type: "string" } } };
   const systemPrompt = "custom system prompt for test";
-  const command = buildAnalysisCommand({ id: "claude", model: "claude-model" }, "prompt", schema, systemPrompt);
+  const command = buildAnalysisCommand({ id: "claude", model: "claude-model" }, "prompt", schema, systemPrompt, { dataOnly: true });
 
   assert.equal(command.command, "claude");
   assert.deepEqual(command.args.slice(0, 6), ["-p", "prompt", "--tools", "", "--output-format", "json"]);
+  assert(command.args.includes("--strict-mcp-config"));
+  assert(command.args.includes('{"mcpServers":{}}'));
   const schemaIdx = command.args.indexOf("--json-schema");
   assert.ok(schemaIdx !== -1, "should have --json-schema");
   assert.equal(command.args[schemaIdx + 1], JSON.stringify(schema));
@@ -152,14 +154,20 @@ test("buildAnalysisCommand constructs Codex command with read-only schema output
     "prompt",
     schema,
     systemPrompt,
-    { schemaFile: "/tmp/schema.json", resultFile: "/tmp/result.json" }
+    { schemaFile: "/tmp/schema.json", resultFile: "/tmp/result.json", dataOnly: true, disabledMcpServers: ["inherited"] }
   );
 
   assert.equal(command.command, "codex");
-  assert.deepEqual(command.args, [
-    "--ask-for-approval", "never",
+  assert.deepEqual(command.args.slice(0, 2), ["--ask-for-approval", "never"]);
+  for (const capability of ['shell_tool', 'unified_exec', 'code_mode', 'code_mode_host', 'browser_use', 'browser_use_external', 'in_app_browser', 'computer_use', 'apps', 'multi_agent', 'multi_agent_v2', 'image_generation', 'view_image', 'skill_search', 'skill_mcp_dependency_install', 'tool_suggest', 'sleep_tool']) {
+    assert(command.args.includes(`features.${capability}=false`), capability);
+  }
+  assert(command.args.includes('mcp_servers.inherited.enabled=false'));
+  assert(command.args.includes('web_search="disabled"'));
+  assert.deepEqual(command.args.slice(command.args.indexOf('exec')), [
     "exec",
     "--ephemeral",
+    "--skip-git-repo-check",
     "--sandbox", "read-only",
     "--output-schema", "/tmp/schema.json",
     "--output-last-message", "/tmp/result.json",

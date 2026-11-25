@@ -231,6 +231,31 @@ captured and only the AI read is missing.
 
 ---
 
+## Logs, failures and alerts
+
+When an item ends as "processing failed" or "AI returned invalid output", the card
+only shows a short, safe reason. The detail is kept for you, on disk, under
+`DATA_DIR`:
+
+| Where | What |
+| --- | --- |
+| `logs/board-oss.log` | A rotated copy of the server's console (5 MiB, 3 files). Set `BOARD_LOG_FILE=/path` to move it, or `BOARD_LOG_FILE=off` to disable. stdout is still printed. |
+| `failures/failures.jsonl` | One scrubbed JSON line per failed job: time, item, job type, **stage** (`capture`, `analysis`, `write`, `timeout`, …), error name and message, and the card's reason. |
+| `failures/<item>-<time>.raw.txt` | The model's raw output (first 64 KB) when the failure was bad output, so you can see exactly what it wrote. The newest 200 are kept. |
+
+Everything is owner-only (`0600`/`0700`) and best-effort: a full disk never fails a job.
+
+A board whose recent jobs mostly fail logs one line you can alert on:
+
+```
+ALERT board my-board: 7 of the last 10 jobs failed (70%, threshold 50%)
+RECOVERED board my-board: 2 of the last 10 jobs failed (20%)
+```
+
+`GET /api/health/jobs` returns the same rolling counts per board (no item data).
+Tune with `BOARD_ALERT_ERROR_RATE` (0–1, default `0.5`), `BOARD_ALERT_MIN_JOBS`
+(default `5`) and `BOARD_ALERT_WINDOW` (default `20`).
+
 ## Backups
 
 Two different backups, and they are not interchangeable.

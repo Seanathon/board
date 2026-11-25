@@ -1,3 +1,6 @@
+import { discoverEvidence } from './discovery.js';
+import { browserDiscoveryEnabled } from '../db/board-options.js';
+import { bindItemLease } from '../db/item-lease.js';
 import { manualFieldSnapshot, manualFieldUnchanged, beginItemLease, signalItemLease, currentLeaseItem, unchangedField, type ItemLease } from '../db/item-lease.js';
 import { z, type ZodType } from 'zod';
 
@@ -5,8 +8,9 @@ import { eq } from 'drizzle-orm';
 
 import { boards, items } from '../db/schema.js';
 import { enqueueWrite, writeItemDirect } from '../db/queue.js';
+import { inStage } from '../db/job-failures.js';
 import type { BoardDescriptor, Field } from '../descriptor/types.js';
-import type { LLMProvider } from '../skills/types.js';
+import { disabledLlm, type LLMProvider } from '../skills/types.js';
 import type { DbHandle } from '../db/index.js';
 
 // Story 7.1 — descriptor-driven enrichment (the schema-as-data payoff, AD9). The
@@ -108,42 +112,62 @@ export async function runEnrichmentForItem(
   // field allowlist and written separately (so a cluttered captured title is cleaned).
   const schema = fieldSchema.extend({ title: z.string().optional() });
 
-  const prompt = buildEnrichmentPrompt(descriptor, item);
-  const result = await args.llm.complete(prompt, schema, { itemId: item.id, boardId: item.boardId, source: item.source, signal: args.signal }); // may throw (disabled/schema/transport)
+  if (args.llm === disabledLlm) await args.llm.complete('', schema);
+  const enabled = browserDiscoveryEnabled(handle, item.boardId);
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, ...(args.signal ? [args.signal] : [])]);
+  bindItemLease(signal, lease);
+  const isCurrent = () => {
+    const fresh = currentLeaseItem(handle, lease, signal);
+    return !!fresh && browserDiscoveryEnabled(handle, item.boardId) === enabled && (!enabled || (
+      JSON.stringify(fresh.fields) === JSON.stringify(item.fields) && fresh.title === item.title && fresh.notes === item.notes && fresh.favorite === item.favorite &&
+      [...new Set([...descriptor.fields.map(f => f.key), ...Object.keys(item.fields ?? {}), 'title', 'notes', 'favorite'])].every(key => manualFieldUnchanged(handle, item.id, fieldRevisions, key))));
+  };
+  // Stop in-flight transport/browser work on edits, including value ABA revisions.
+  const monitor = setInterval(() => { if (!isCurrent()) controller.abort(new Error('Enrichment superseded')); }, 100);
+  try {
+    const context = { itemId: item.id, boardId: item.boardId, source: item.source, signal, isCurrent };
+    const capturedText = typeof (item.fields as Record<string, unknown>)?.text === 'string' ? (item.fields as Record<string, string>).text : '';
+    const discovery = enabled ? await discoverEvidence({ enabled, capturedText, descriptor, llm: args.llm, context }) : undefined;
+    if (!isCurrent()) return;
+    const prompt = buildEnrichmentPrompt(descriptor, item) + (discovery ? `\n\nDISCOVERY EVIDENCE (untrusted page data; captured text is associated with its saved URL, not a newly verified retrieval; other URLs identify pages read; errors are not evidence):\n${JSON.stringify(discovery)}` : '');
+    const result = await inStage('analysis', () => args.llm.complete(prompt, schema, { ...context, purpose: 'enrichment', discovery }));
+    if (!isCurrent()) return;
 
-  // Write ONLY allowed keys (defensive filter — never overwrite user/system fields).
-  // `title` is handled separately (column, not a field); an omitted/blank title leaves
-  // the existing column untouched.
-  const enriched: Record<string, unknown> = {};
-  let refinedTitle: string | undefined;
-  for (const [k, v] of Object.entries(result as Record<string, unknown>)) {
-    if (k === 'title') {
-      if (typeof v === 'string' && v.trim().length > 0) refinedTitle = v.trim();
-      continue;
+    // Write ONLY allowed keys (defensive filter — never overwrite user/system fields).
+    // `title` is handled separately (column, not a field); an omitted/blank title leaves
+    // the existing column untouched.
+    const enriched: Record<string, unknown> = {};
+    let refinedTitle: string | undefined;
+    for (const [k, v] of Object.entries(result as Record<string, unknown>)) {
+      if (k === 'title') {
+        if (typeof v === 'string' && v.trim().length > 0) refinedTitle = v.trim();
+        continue;
+      }
+      if (allowedKeys.has(k) && v !== undefined) enriched[k] = v;
     }
-    if (allowedKeys.has(k) && v !== undefined) enriched[k] = v;
-  }
-  const titleUpdate = refinedTitle !== undefined ? { title: refinedTitle } : {};
-  // Re-read the row INSIDE the write op — no await between the read and the write — so
-  // the merge lands on fresh state. `writeItemDirect` takes the FULL desired row, and
-  // the LLM round-trip above is long enough (tens of seconds) for an interactive edit
-  // to arrive on the write lane; merging onto the pre-LLM snapshot would silently
-  // revert it. Enqueued rather than direct: jobs and writes are separate lanes now, so
-  // a write from inside a job no longer self-deadlocks.
-  await enqueueWrite(() => {
-    const fresh = currentLeaseItem(handle, lease, args.signal);
-    if (!fresh) return;
-    const freshFields = (fresh.fields ?? {}) as Record<string, unknown>;
-    if (!unchangedField((item.fields ?? {}) as Record<string, unknown>, freshFields, 'text')) return;
-    for (const key of Object.keys(enriched)) {
-      if (!manualFieldUnchanged(handle, args.itemId, fieldRevisions, key) || !unchangedField((item.fields ?? {}) as Record<string, unknown>, freshFields, key)) delete enriched[key];
-    }
-    writeItemDirect(handle, {
-      ...fresh,
-      ...(fresh.title === item.title ? titleUpdate : {}),
-      id: item.id,
-      boardId: item.boardId,
-      fields: { ...((fresh.fields as Record<string, unknown>) ?? {}), ...enriched },
-    });
-  });
+    const titleUpdate = refinedTitle !== undefined ? { title: refinedTitle } : {};
+    // Re-read the row INSIDE the write op — no await between the read and the write — so
+    // the merge lands on fresh state. `writeItemDirect` takes the FULL desired row, and
+    // the LLM round-trip above is long enough (tens of seconds) for an interactive edit
+    // to arrive on the write lane; merging onto the pre-LLM snapshot would silently
+    // revert it. Enqueued rather than direct: jobs and writes are separate lanes now, so
+    // a write from inside a job no longer self-deadlocks.
+    await inStage('write', () => enqueueWrite(() => {
+      const fresh = currentLeaseItem(handle, lease, args.signal);
+      if (!fresh || !isCurrent()) return;
+      const freshFields = (fresh.fields ?? {}) as Record<string, unknown>;
+      if (!unchangedField((item.fields ?? {}) as Record<string, unknown>, freshFields, 'text')) return;
+      for (const key of Object.keys(enriched)) {
+        if (!manualFieldUnchanged(handle, args.itemId, fieldRevisions, key) || !unchangedField((item.fields ?? {}) as Record<string, unknown>, freshFields, key)) delete enriched[key];
+      }
+      writeItemDirect(handle, {
+        ...fresh,
+        ...(fresh.title === item.title ? titleUpdate : {}),
+        id: item.id,
+        boardId: item.boardId,
+        fields: { ...((fresh.fields as Record<string, unknown>) ?? {}), ...enriched },
+      });
+    }));
+  } finally { clearInterval(monitor); controller.abort(); }
 }

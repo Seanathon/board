@@ -36,6 +36,32 @@ export async function refetchItem(
 }
 
 /**
+ * Retry a FAILED item's analysis. If its page text was already captured, re-run
+ * enrichment ONLY (source omitted, so the saved text and screenshot are kept and no
+ * browser is launched); otherwise fall back to a full capture + enrich refetch.
+ * Preservation is by construction, as with refetch. Items already in flight are left
+ * alone, so a double click can't queue two jobs.
+ */
+export async function retryItemAnalysis(
+  handle: DbHandle,
+  args: { itemId: string; registry: CaptureRegistry; llm: LLMProvider; screenshotsDir?: string; timeoutFn?: TimeoutFn },
+): Promise<JobResult | { type: 'retry'; ok: true; skipped: 'in-flight' } & Partial<JobResult>> {
+  const item = handle.db.select().from(items).where(eq(items.id, args.itemId)).get();
+  if (!item) throw new Error(`Cannot retry: unknown item "${args.itemId}"`);
+  if (item.status === 'pending' || item.status === 'processing') return { type: 'retry', ok: true, skipped: 'in-flight' };
+  const text = (item.fields as Record<string, unknown> | null)?.text;
+  if (typeof text !== 'string' || text.trim().length === 0) return refetchItem(handle, args);
+  return runCaptureEnrichJob(handle, {
+    itemId: item.id,
+    boardId: item.boardId,
+    source: undefined, // enrich-only: keep the captured text and screenshot
+    llm: args.llm,
+    registry: args.registry,
+    timeoutFn: args.timeoutFn,
+  });
+}
+
+/**
  * Batch RE-ENRICH every item on a board (the "Re-run AI on all items" action after
  * editing a board's fields). Enrich-ONLY — no re-capture (source omitted → the
  * pipeline skips capture and re-runs enrichment over the already-captured content),

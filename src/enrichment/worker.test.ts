@@ -189,3 +189,51 @@ describe('runEnrichmentForItem (Story 7.1)', () => {
     assert.equal(row?.errorReason, null);
   });
 });
+
+it('opted-in enrichment carries captured evidence and accepts partial custom fields', async () => {
+  const { setBrowserDiscovery } = await import('../db/board-options.js');
+  const handle = initDb(':memory:');
+  try {
+    handle.db.insert(boards).values({ id: 'b', name: 'B', view: 'grid', descriptor: NOVEL_DESCRIPTOR }).run();
+    handle.db.insert(items).values({ id: 'i', boardId: 'b', source: 'https://example.com/', fields: { text: 'Captured evidence. '.repeat(60), note_field: 'Keep' } }).run();
+    await setBrowserDiscovery(handle, 'b', true);
+    const llm: LLMProvider = { async complete(prompt, schema, context) {
+      assert.equal(context?.purpose, 'enrichment'); assert.equal(context?.discovery?.sources[0].kind, 'captured'); assert.equal(context?.isCurrent?.(), true);
+      assert(prompt.includes('DISCOVERY EVIDENCE'));
+      return schema.parse({ foo_score: 3 });
+    } };
+    await runEnrichmentForItem(handle, { itemId: 'i', llm });
+    assert.deepEqual(handle.db.select().from(items).get()!.fields, { text: 'Captured evidence. '.repeat(60), note_field: 'Keep', foo_score: 3 });
+  } finally { handle.sqlite.close(); }
+});
+for (const change of ['opt-out', 'opt-out-aba', 'curation', 'curation-aba', 'move', 'source', 'delete', 'schema', 'schema-aba']) {
+  it(`opted-in adoption and status reject late ${change}`, async () => {
+    const { setBrowserDiscovery } = await import('../db/board-options.js');
+    const { writeItem, deleteItem } = await import('../db/queue.js');
+    const handle = initDb(':memory:');
+    try {
+      handle.db.insert(boards).values({ id: 'b', name: 'B', view: 'grid', descriptor: NOVEL_DESCRIPTOR }).run();
+      handle.db.insert(boards).values({ id: 'other', name: 'Other', view: 'grid', descriptor: NOVEL_DESCRIPTOR }).run();
+      handle.db.insert(items).values({ id: 'i', boardId: 'b', source: 'https://example.com/', notes: 'Before', fields: { text: 'Captured evidence. '.repeat(60), note_field: 'Keep' } }).run();
+      await setBrowserDiscovery(handle, 'b', true);
+      const row = () => handle.db.select().from(items).where(eq(items.id, 'i')).get();
+      let expected: ReturnType<typeof row>;
+      const llm: LLMProvider = { async complete(_prompt, schema, context) {
+        if (change.startsWith('opt-out')) { await setBrowserDiscovery(handle, 'b', false); if (change.endsWith('aba')) await setBrowserDiscovery(handle, 'b', true); }
+        if (change.startsWith('curation')) { await patchItemFields(handle, 'i', { notes: 'Changed' }); if (change.endsWith('aba')) await patchItemFields(handle, 'i', { notes: 'Before' }); }
+        if (change === 'move') await writeItem(handle, { ...row()!, boardId: 'other' });
+        if (change === 'source') await writeItem(handle, { ...row()!, source: 'https://example.com/new' });
+        if (change === 'delete') await deleteItem(handle, 'i');
+        if (change.startsWith('schema')) {
+          const { updateBoardDescriptor } = await import('../db/seed.js');
+          updateBoardDescriptor(handle.db, 'b', { ...NOVEL_DESCRIPTOR, enrichment_prompt: 'Changed lens' });
+          if (change.endsWith('aba')) updateBoardDescriptor(handle.db, 'b', NOVEL_DESCRIPTOR);
+        }
+        assert.equal(context?.isCurrent?.(), false); expected = row();
+        return schema.parse({ foo_score: 99 });
+      } };
+      await runItemJob(handle, { itemId: 'i', type: 'enrich', timeoutMs: 2000, work: (signal, lease) => runEnrichmentForItem(handle, { itemId: 'i', llm, signal, lease }) });
+      assert.deepEqual(row(), expected);
+    } finally { handle.sqlite.close(); }
+  });
+}

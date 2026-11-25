@@ -1,3 +1,4 @@
+import { browserDiscoveryEnabled, setBrowserDiscovery } from './db/board-options.js';
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyReply } from "fastify";
 import fs from "node:fs";
@@ -22,12 +23,15 @@ import { patchItemFields, deleteItemWithAssets } from "./db/item-actions.js";
 import { uploadAssetForItem } from "./capture/manual-upload.js";
 import { listBoardItemsForUi, getItemForUi } from "./db/hydrate.js";
 import { renameBoard, deleteBoardCascade } from "./db/board-actions.js";
-import { boards as boardsTable } from "./db/schema.js";
+import { boards as boardsTable, items } from "./db/schema.js";
 import { addItemSkill } from "./skills/add-item.js";
-import { refetchItem, reenrichBoardItems } from "./enrichment/refetch.js";
+import { refetchItem, reenrichBoardItems, retryItemAnalysis } from "./enrichment/refetch.js";
 import { assignItems } from "./enrichment/assign.js";
 import { archiveFootprint } from "./db/archive-footprint.js";
 import { createRegistry, registerAllSkills, type SkillRegistry } from "./skills/registry.js";
+import { createFileFailureSink, setJobFailureSink } from "./db/job-failures.js";
+import { jobHealth } from "./db/job-health.js";
+import { installConsoleFileLog } from "./logging.js";
 import { buildCtx, type JobQueue, type LLMProvider, type Logger } from "./skills/types.js";
 import { selectProvider, describeProvider } from "./llm/select-provider.js";
 import { disabledLlm } from "./skills/types.js";
@@ -318,6 +322,12 @@ export interface BuildServerOptions {
    * the 16.1 snapshot job on the single worker.
    */
   enqueueSnapshot?: (args: { itemId: string; url: string | null }) => void;
+  /**
+   * Directory for operator-side failure evidence (stage, scrubbed error, raw model
+   * output). Opt-in so hermetic tests never write to disk; the entrypoint passes
+   * `<DATA_DIR>/failures`.
+   */
+  failureDir?: string;
 }
 
 export async function buildServer(opts: BuildServerOptions = {}) {
@@ -328,6 +338,8 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   // don't materialize ./data).
   const screenshotsDir = opts.screenshotsDir ?? config.screenshotsDir;
   const snapshotsDir = opts.snapshotsDir ?? config.snapshotsDir;
+
+  if (opts.failureDir) setJobFailureSink(createFileFailureSink(opts.failureDir));
 
   const app = Fastify({ logger: false, bodyLimit: 20 * 1024 * 1024 });
 
@@ -491,6 +503,17 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     provider: llm === disabledLlm ? null : describeProvider(config),
   }));
 
+  // Deliberately separate from descriptors and the global settings write API.
+  app.patch<{ Params: { id: string }; Body: { browserDiscovery?: unknown } }>("/api/boards/:id/options", async (req, reply) => {
+    if (!req.body || Object.keys(req.body).length !== 1 || typeof req.body.browserDiscovery !== 'boolean') {
+      reply.status(400); return { error: 'Only a boolean browserDiscovery is accepted' };
+    }
+    const handle = opts.db ?? getDb();
+    try { await setBrowserDiscovery(handle, req.params.id, req.body.browserDiscovery); }
+    catch (err) { reply.status(404); return { error: (err as Error).message }; }
+    return { browserDiscovery: browserDiscoveryEnabled(handle, req.params.id) };
+  });
+
   // Board edit actions (the "Edit board" modal). Creation is via the compose-board /
   // create-board skills; these cover rename + delete-with-cascade.
   app.patch<{ Params: { id: string }; Body: { name?: string; descriptor?: unknown } }>(
@@ -562,6 +585,9 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   // write → systemd restart loop). A DB-reachable check, if ever wanted, is a separate
   // /readyz. Used by the systemd unit + the container healthcheck (Story 11.2).
   app.get("/healthz", async () => ({ ok: true }));
+  // Rolling per-board job outcomes (counts only; no item data). `alerting` mirrors the
+  // ALERT log line, so a poller can use either.
+  app.get("/api/health/jobs", async () => ({ boards: jobHealth().snapshot() }));
 
   // Story 16.3 — read-only archive footprint ({totalBytes,count} over kind='snapshot'
   // files). Surfaced for settings/board-info so "no storage limit" is never a silent
@@ -699,6 +725,7 @@ t.addEventListener('input',upd);upd();
         : b.id === LIBRARY_BOARD_ID ? "library"
         : b.view === "grid" ? "inspiration" : "library",
       descriptor: b.descriptor,
+      options: { browserDiscovery: browserDiscoveryEnabled(handle, b.id) },
     }));
   });
 
@@ -800,6 +827,21 @@ t.addEventListener('input',upd);upd();
       void refetchItem(handle, { itemId: req.params.id, registry: captureRegistry, llm, screenshotsDir })
         .catch((e) => logger.error(`refetch "${req.params.id}" failed to start: ${(e as Error).message}`));
       return getItemForUi(handle, req.params.id) ?? { id: req.params.id, status: "processing" };
+    }
+  );
+
+  // Retry a failed item's analysis. Keeps the saved page text and screenshot (no
+  // re-capture) when they exist; falls back to a full refetch when capture never
+  // produced text. Idempotent while the item is already in flight.
+  app.post<{ Params: { cid: string; id: string } }>(
+    "/api/collections/:cid/items/:id/retry",
+    async (req, reply) => {
+      const handle = opts.db ?? getDb();
+      const row = handle.db.select().from(items).where(eq(items.id, req.params.id)).get();
+      if (!row || row.boardId !== req.params.cid) { reply.status(404); return { error: "Not found" }; }
+      void retryItemAnalysis(handle, { itemId: row.id, registry: captureRegistry, llm, screenshotsDir })
+        .catch((e) => logger.error(`retry "${row.id}" failed to start: ${(e as Error).message}`));
+      return getItemForUi(handle, row.id) ?? { id: row.id, status: "processing" };
     }
   );
 
@@ -930,6 +972,12 @@ t.addEventListener('input',upd);upd();
 // Entrypoint guard — only listen when run directly
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   ensureDataDir(); // Story 2.2: create DATA_DIR + screenshots on real boot (AC 2)
+  // Keep a rotated copy of the console under DATA_DIR/logs (BOARD_LOG_FILE=off disables
+  // it; any other value is the file path). stdout may be a socket, so this is the log
+  // an operator can actually read after a failure.
+  if (process.env.BOARD_LOG_FILE !== "off") {
+    installConsoleFileLog({ file: process.env.BOARD_LOG_FILE || path.join(config.dataDir, "logs", "board-oss.log") });
+  }
   // Story 1.2/8.6: idempotently seed the boards on EVERY boot so a fresh DATA_DIR
   // (container / LXC first-run) has the Inspiration + Library boards — without this,
   // zero-config first-run (UJ-3/SM-1) and any add-item/capture 500 with "unknown board".
@@ -938,7 +986,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   reconcileInterruptedItems(getDb());
   // Story 6.1: register capture adapters (6.2–6.4 populate the registry).
   registerAllCaptureAdapters(captureRegistry);
-  const app = await buildServer();
+  const app = await buildServer({ failureDir: path.join(config.dataDir, "failures") });
   // Story 2.4: bind is config-driven; default HOST (2.1) is 127.0.0.1 (secure
   // default — only an explicit non-empty HOST exposes it).
   const listenOpts = getListenOptions();

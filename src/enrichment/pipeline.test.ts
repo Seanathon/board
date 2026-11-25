@@ -45,3 +45,23 @@ describe('runCaptureEnrichJob non-blocking accept (Story 8.4 AC4)', () => {
     assert.equal(handle.db.select().from(items).where(eq(items.id, 'it')).get()?.status, 'done');
   });
 });
+
+it('timed-out enrichment holds original job lane until transport teardown finishes', async () => {
+  const { enqueueJob } = await import('../db/queue.js');
+  const { setBrowserDiscovery } = await import('../db/board-options.js');
+  const handle = initDb(':memory:'); let release!: () => void;
+  const gate = new Promise<void>(r => { release = r; });
+  try {
+    handle.db.insert(boards).values({ id: 'b', name: 'B', view: 'list', descriptor: { view: 'list', ingest_mode: 'url-readable', enrichment_prompt: '', fields: [{ key: 'custom', label: 'Custom', type: 'text', enrichable: true }] } }).run();
+    handle.db.insert(items).values({ id: 'i', boardId: 'b', source: 'https://example.com/', fields: { text: 'Captured evidence. '.repeat(60) } }).run();
+    await setBrowserDiscovery(handle, 'b', true);
+    let entered!: () => void; const entry = new Promise<void>(r => { entered = r; });
+    const work = runCaptureEnrichJob(handle, { itemId: 'i', boardId: 'b', registry: createCaptureRegistry(), timeoutMs: 40,
+      llm: { async complete(_p, _s, context) { entered(); await new Promise<void>(r => context!.signal!.addEventListener('abort', () => r(), { once: true })); await gate; throw new Error('disposed'); } } });
+    await entry; assert.equal((await work).timedOut, true);
+    let next = false;
+    const second = enqueueJob({ type: 'enrich', timeoutMs: 1000, run: async () => { next = true; } });
+    await new Promise(r => setImmediate(r)); assert.equal(next, false);
+    release(); await second; assert.equal(next, true);
+  } finally { release(); handle.sqlite.close(); }
+});

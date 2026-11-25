@@ -16,9 +16,12 @@ export { EnrichmentDisabledError } from '../skills/types.js';
  * "backend unreachable".
  */
 export class LLMSchemaError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
+  /** The model's raw output, kept for operator-side failure evidence (never shown in the UI). */
+  readonly rawOutput?: string;
+  constructor(message: string, options?: { cause?: unknown; rawOutput?: string }) {
     super(message, options);
     this.name = 'LLMSchemaError';
+    if (options?.rawOutput !== undefined) this.rawOutput = options.rawOutput;
   }
 }
 
@@ -41,12 +44,12 @@ export function parseStructuredOutput<T>(raw: string, schema: ZodType<T>): T {
   try {
     json = JSON.parse(raw);
   } catch (err) {
-    throw new LLMSchemaError('Provider returned non-JSON output', { cause: err });
+    throw new LLMSchemaError('Provider returned non-JSON output', { cause: err, rawOutput: raw });
   }
   const result = schema.safeParse(json);
   if (!result.success) {
     const detail = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-    throw new LLMSchemaError(`Provider output failed schema: ${detail}`, { cause: result.error });
+    throw new LLMSchemaError(`Provider output failed schema: ${detail}`, { cause: result.error, rawOutput: raw });
   }
   return result.data;
 }

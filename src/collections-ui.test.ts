@@ -8,6 +8,7 @@ import {
   itemUrl,
   addUrl,
   refetchUrl,
+  retryUrl,
   screenshotUrl,
   moveUrl,
   skillsUrl,
@@ -82,6 +83,10 @@ test("itemUrl builds correct path", () => {
 test("addUrl builds correct path (same as itemsUrl)", () => {
   assert.equal(addUrl("inspiration"), "/api/collections/inspiration/items");
   assert.equal(addUrl("library"), "/api/collections/library/items");
+});
+
+test("retryUrl builds the analysis-retry path", () => {
+  assert.equal(retryUrl("inspiration", "it-1"), "/api/collections/inspiration/items/it-1/retry");
 });
 
 test("refetchUrl builds correct path", () => {

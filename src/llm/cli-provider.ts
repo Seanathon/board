@@ -5,8 +5,8 @@ import { join } from 'node:path';
 
 import type { ZodType } from 'zod';
 
-import { buildAnalysisCommand, parseJsonFromText, extractAnalysisPayload, toCodexOutputSchema } from '../add.js';
-import type { Logger } from '../skills/types.js';
+import { buildAnalysisCommand, parseJsonFromTextWithRepairs, extractAnalysisPayload, toCodexOutputSchema } from '../add.js';
+import type { Logger, CompletionContext } from '../skills/types.js';
 import { zodToJsonSchema } from './http-provider.js';
 import { LLMSchemaError, LLMTransportError, type LLMProvider } from './provider.js';
 
@@ -23,6 +23,7 @@ import { LLMSchemaError, LLMTransportError, type LLMProvider } from './provider.
 
 /** A minimal child-process surface — injectable so tests use a fake (no subprocess). */
 export interface CliChild {
+  pid?: number;
   stdout: { on(event: 'data', cb: (chunk: Buffer | string) => void): void };
   stderr: { on(event: 'data', cb: (chunk: Buffer | string) => void): void };
   on(event: 'close' | 'error', cb: (arg: number | Error) => void): void;
@@ -49,6 +50,14 @@ export interface CliProviderConfig {
   /** Wall-clock timeout (ms) before the child is killed. */
   timeoutMs?: number;
   logger?: Logger;
+  /**
+   * Extra attempts after the agent RAN and exited non-zero (rate limits and upstream
+   * 5xx surface this way). Default 1. Never applied to timeouts, aborts, spawn
+   * failures or output-bound breaches: those are deterministic or already costly.
+   */
+  transientRetries?: number;
+  /** Pause before a retry (ms). Default 2000; tests pass 0. */
+  retryDelayMs?: number;
 }
 
 // Wall-clock ceiling for one agent subprocess. Generous on purpose: a self-hosted,
@@ -63,7 +72,7 @@ const DEFAULT_SYSTEM_PROMPT = 'Return ONLY a JSON object matching the provided s
 const noopLogger: Logger = { info: () => {}, warn: () => {}, error: () => {} };
 
 const defaultSpawn: SpawnFn = (command, args, opts) =>
-  nodeSpawn(command, args, { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'] }) as unknown as CliChild;
+  nodeSpawn(command, args, { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' }) as unknown as CliChild;
 
 interface ProcessResult {
   code: number;
@@ -71,69 +80,77 @@ interface ProcessResult {
   stderr: string;
 }
 
+/** Abortable pause between retry attempts. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(timer); reject(signal!.reason ?? new Error('Aborted')); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /** Run a child to completion with a wall-clock timeout that kills it. */
+let terminationUnconfirmed = false;
 function runProcess(
-  spawnFn: SpawnFn,
-  command: string,
-  args: string[],
-  cwd: string,
-  timeoutMs: number,
+  spawnFn: SpawnFn, command: string, args: string[], cwd: string, timeoutMs: number, signal?: AbortSignal,
 ): Promise<ProcessResult> {
+  signal?.throwIfAborted();
+  if (spawnFn === defaultSpawn && terminationUnconfirmed) throw new LLMTransportError('CLI termination unconfirmed; restart required');
   return new Promise<ProcessResult>((resolve, reject) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
+    let stdout = '', stderr = '';
+    let settled = false, closed = false;
+    let failure: Error | undefined;
+    let disposalTimer: ReturnType<typeof setTimeout> | undefined;
     const child = spawnFn(command, args, { cwd });
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
-      reject(new LLMTransportError(`CLI agent "${command}" timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    const overflow = (): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
-      reject(new LLMTransportError(`CLI agent "${command}" exceeded ${MAX_OUTPUT_BYTES} bytes of output`));
+    const ownsGroup = spawnFn === defaultSpawn && process.platform !== 'win32' && child.pid !== undefined;
+    const gone = () => {
+      if (!ownsGroup) return closed;
+      try { process.kill(-child.pid!, 0); return false; }
+      catch (err) { return (err as NodeJS.ErrnoException).code === 'ESRCH'; }
     };
-    child.stdout.on('data', (c) => {
-      stdout += c.toString();
-      if (stdout.length + stderr.length > MAX_OUTPUT_BYTES) overflow();
-    });
-    child.stderr.on('data', (c) => {
-      stderr += c.toString();
-      if (stdout.length + stderr.length > MAX_OUTPUT_BYTES) overflow();
-    });
-    child.on('error', (err) => {
+    const finish = (error?: Error, result?: ProcessResult) => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new LLMTransportError(`Failed to spawn "${command}": ${(err as Error).message}`, { cause: err }));
+      settled = true; clearTimeout(timer); clearTimeout(disposalTimer);
+      signal?.removeEventListener('abort', abort);
+      if (error) reject(error); else resolve(result!);
+    };
+    const fail = (error: Error) => {
+      if (settled || failure) return;
+      failure = error;
+      try { if (ownsGroup) process.kill(-child.pid!, 'SIGKILL'); else child.kill('SIGKILL'); } catch { /* Check disposal below. */ }
+      if (gone()) { finish(failure); return; }
+      disposalTimer = setTimeout(() => {
+        if (ownsGroup && !gone()) terminationUnconfirmed = true;
+        finish(failure);
+      }, 1_000);
+    };
+    const abort = () => fail(new LLMTransportError('CLI completion aborted'));
+    const timer = setTimeout(() => fail(new LLMTransportError(`CLI agent "${command}" timed out after ${timeoutMs}ms`)), timeoutMs);
+    signal?.addEventListener('abort', abort, { once: true });
+    const append = (value: Buffer | string, out: boolean) => {
+      if (settled || failure) return;
+      if (out) stdout += value.toString(); else stderr += value.toString();
+      if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > MAX_OUTPUT_BYTES) fail(new LLMTransportError(`CLI agent "${command}" exceeded ${MAX_OUTPUT_BYTES} bytes of output`));
+    };
+    child.stdout.on('data', c => append(c, true));
+    child.stderr.on('data', c => append(c, false));
+    child.on('error', err => fail(new LLMTransportError(`Failed to spawn "${command}": ${(err as Error).message}`, { cause: err })));
+    child.on('close', code => {
+      closed = true;
+      if (failure) { if (gone()) finish(failure); return; }
+      finish(undefined, { code: typeof code === 'number' ? code : 0, stdout, stderr });
     });
-    child.on('close', (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ code: typeof code === 'number' ? code : 0, stdout, stderr });
-    });
+    if (signal?.aborted) abort();
   });
 }
 
 export class CliProvider implements LLMProvider {
   constructor(private readonly cfg: CliProviderConfig) {}
 
-  async complete<T>(prompt: string, schema: ZodType<T>): Promise<T> {
+  async complete<T>(prompt: string, schema: ZodType<T>, context?: CompletionContext): Promise<T> {
+    context?.signal?.throwIfAborted();
     const { agent } = this.cfg;
     const spawnFn = this.cfg.spawn ?? defaultSpawn;
     const readFile = this.cfg.readFile ?? ((p: string) => readFileSync(p, 'utf-8'));
@@ -152,12 +169,36 @@ export class CliProvider implements LLMProvider {
       const outputSchema = agent.id === 'codex' ? toCodexOutputSchema(jsonSchema) : jsonSchema;
       writeFile(schemaFile, JSON.stringify(outputSchema));
 
+      const dataOnly = context?.purpose === 'discovery' || context?.discovery !== undefined;
+      let disabledMcpServers: string[] = [];
+      if (dataOnly && agent.id === 'codex') {
+        // Configuration inspection only: this command does not start an agent or MCP server.
+        // Never log its output; inherited server configuration can contain credentials.
+        const inventory = await runProcess(spawnFn, 'codex', ['mcp', 'list', '--json'], tempDir, Math.min(timeoutMs, 5_000), context?.signal);
+        if (inventory.code !== 0) throw new LLMTransportError('Unable to inspect Codex MCP configuration safely');
+        let servers: unknown;
+        try { servers = JSON.parse(inventory.stdout); } catch { throw new LLMTransportError('Invalid Codex MCP configuration inventory'); }
+        if (!Array.isArray(servers) || servers.some(server => !server || typeof server.name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(server.name))) {
+          throw new LLMTransportError('Unsupported Codex MCP configuration inventory');
+        }
+        disabledMcpServers = servers.map(server => server.name);
+      }
       const { command, args } = buildAnalysisCommand(agent, prompt, jsonSchema as object, systemPrompt, {
-        schemaFile,
-        resultFile,
+        schemaFile, resultFile, dataOnly, disabledMcpServers,
       });
 
-      const { code, stdout, stderr } = await runProcess(spawnFn, command, args, tempDir, timeoutMs);
+      const retries = Math.max(0, this.cfg.transientRetries ?? 1);
+      let attempt = 0;
+      let run = await runProcess(spawnFn, command, args, tempDir, timeoutMs, context?.signal);
+      context?.signal?.throwIfAborted();
+      while (run.code !== 0 && attempt < retries) {
+        attempt++;
+        logger.warn(`CLI agent "${command}" exited ${run.code}; retrying (${attempt}/${retries}): ${run.stderr.slice(0, 200)}`);
+        await sleep(this.cfg.retryDelayMs ?? 2_000, context?.signal);
+        run = await runProcess(spawnFn, command, args, tempDir, timeoutMs, context?.signal);
+        context?.signal?.throwIfAborted();
+      }
+      const { code, stdout, stderr } = run;
       if (code !== 0) {
         logger.error(`CLI agent "${command}" exited ${code}: ${stderr.slice(0, 500)}`);
         throw new LLMTransportError(`CLI agent "${command}" exited ${code}`);
@@ -168,14 +209,18 @@ export class CliProvider implements LLMProvider {
 
       let parsed: unknown;
       try {
-        parsed = extractAnalysisPayload(parseJsonFromText(raw));
+        const { value, repairs } = parseJsonFromTextWithRepairs(raw);
+        if (repairs.length > 0) {
+          logger.warn(`CLI agent output repaired before parsing (dropped: ${repairs.map((r) => r.key ?? r.kind).join(', ')})`);
+        }
+        parsed = extractAnalysisPayload(value);
       } catch (err) {
-        throw new LLMSchemaError('CLI agent output was not parseable JSON', { cause: err });
+        throw new LLMSchemaError('CLI agent output was not parseable JSON', { cause: err, rawOutput: raw });
       }
       const result = schema.safeParse(parsed);
       if (!result.success) {
         const detail = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-        throw new LLMSchemaError(`CLI agent output failed schema: ${detail}`, { cause: result.error });
+        throw new LLMSchemaError(`CLI agent output failed schema: ${detail}`, { cause: result.error, rawOutput: raw });
       }
       return result.data;
     } finally {

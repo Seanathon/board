@@ -1,0 +1,20 @@
+```json
+{
+  "itemId": "00000000-0000-4000-8000-000000000000",
+  "source": "https://example.com/",
+  "fields": {
+    "summary": "A hosted notes product for small teams. The vendor describes it as a shared workspace with a review step before changes are published [T1].",
+    "category": "reference",
+    "audience": "Small product teams that already keep their notes in plain text and want review and history without adopting a heavyweight tool [T1][T2].",
+    "job": "Keep a team's working notes in one place, route edits through review, and keep a durable record of what changed and who approved it [T2].",
+    "workflow": "Objects: workspaces, pages, review requests and a change log. Flow: a member edits a page, requests review, a reviewer approves, and the change is published [T2].",
+    "boundary": "It owns the editor, review flow and history. It integrates with a few chat and calendar tools but does not run the work itself [T2].",
+    "control": "Reviewers approve or reject each change. Page-level permissions decide who can edit or publish, and every decision is logged [T2].",
+    "operations": "Hosted web app with desktop clients on macOS and Windows [T2]. Pricing is described only as a per-seat monthly fee on the vendor page [T1].",
+    "comparison",
+    "implication": "Analyst inference: worth reading the vendor's permissions page before deciding whether its review log is comparable, since the supplied pages describe it only briefly.",
+    "evidence": "T1 | example.com excerpt | https://example.com/ | home-page positioning and pricing claims.\nT2 | example.com excerpt | https://example.com/docs | workflow and permissions description.",
+    "unknowns": "All evidence is vendor-authored. No runtime validation. Data export, retention and offline behaviour are not stated in the supplied pages."
+  }
+}
+```
