@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import type { ZodType } from 'zod';
 
-import { buildAnalysisCommand, parseJsonFromText, extractAnalysisPayload, toCodexOutputSchema } from '../add.js';
+import { buildAnalysisCommand, parseJsonFromTextWithRepairs, extractAnalysisPayload, toCodexOutputSchema } from '../add.js';
 import type { Logger, CompletionContext } from '../skills/types.js';
 import { zodToJsonSchema } from './http-provider.js';
 import { LLMSchemaError, LLMTransportError, type LLMProvider } from './provider.js';
@@ -180,7 +180,11 @@ export class CliProvider implements LLMProvider {
 
       let parsed: unknown;
       try {
-        parsed = extractAnalysisPayload(parseJsonFromText(raw));
+        const { value, repairs } = parseJsonFromTextWithRepairs(raw);
+        if (repairs.length > 0) {
+          logger.warn(`CLI agent output repaired before parsing (dropped: ${repairs.map((r) => r.key ?? r.kind).join(', ')})`);
+        }
+        parsed = extractAnalysisPayload(value);
       } catch (err) {
         throw new LLMSchemaError('CLI agent output was not parseable JSON', { cause: err });
       }

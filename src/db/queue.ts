@@ -316,14 +316,35 @@ export function interruptItemJobDirect(handle: DbHandle, id: string, reason: str
  * Map a thrown error to a SHORT, user-safe `error_reason` — never a raw stack or
  * secret-bearing string (NFR-3; rendered by Story 8.5). Classified by error name so
  * the storage layer stays decoupled from llm/.
+ *
+ * `SyntaxError` / `ZodError` are the model's own output failing to parse or validate
+ * (enrichment is the only place they surface here), so they share the existing
+ * "AI returned invalid output" reason instead of the uninformative "processing failed".
  */
 export function cleanErrorReason(err: unknown): string {
   const name = (err as { name?: string })?.name;
   if (name === 'LLMTransportError') return 'could not reach the AI provider';
-  if (name === 'LLMSchemaError') return 'AI returned invalid output';
+  if (name === 'LLMSchemaError' || name === 'SyntaxError' || name === 'ZodError') return 'AI returned invalid output';
   const msg = String((err as Error)?.message ?? '');
   if (/timed out|timeout/i.test(msg)) return 'timed out';
   return 'processing failed';
+}
+
+/**
+ * Operator-facing description of a failure for the server log (NOT stored, NOT sent
+ * to the UI): `Name: message`, one line, bounded, with obvious credentials masked.
+ * `cleanErrorReason` deliberately discards this detail, which made failures
+ * undiagnosable; the log is where it belongs.
+ */
+export function describeJobError(err: unknown): string {
+  const name = (err as { name?: string })?.name || 'Error';
+  const message = String((err as Error)?.message ?? err)
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\b(sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{8,}/g, '$1-***')
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 ***')
+    .replace(/\b(api[_-]?key|token|secret|password|authorization)(["']?\s*[:=]\s*["']?)[^\s"',;]+/gi, '$1$2***')
+    .trim();
+  return `${name}: ${message.length > 300 ? `${message.slice(0, 300)}…` : message}`;
 }
 
 export interface RunItemJobArgs {
@@ -333,6 +354,8 @@ export interface RunItemJobArgs {
   work: (signal: AbortSignal, lease?: ItemLease) => Promise<void> | void;
   teardown?: (signal: AbortSignal) => Promise<void>;
   timeoutFn?: TimeoutFn;
+  /** Where failure detail is logged (default: console). The UI only ever sees the clean reason. */
+  logger?: { error(message: string): void };
 }
 
 /**
@@ -378,6 +401,7 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
         if (err instanceof EnrichmentDisabledError) {
           setItemStatusDirect(handle, args.itemId, 'done', null); // disabled = done, not error
         } else {
+          (args.logger ?? console).error(`item ${args.itemId} (${args.type}) failed: ${describeJobError(err)}`);
           setItemStatusDirect(handle, args.itemId, 'error', cleanErrorReason(err));
         }
         // swallowed: the terminal status is recorded; the job itself "succeeded" at

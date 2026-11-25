@@ -8,7 +8,7 @@ import { eq } from 'drizzle-orm';
 
 import { initDb } from './index.js';
 import { boards, items } from './schema.js';
-import { runItemJob, reconcileInterruptedItems, type TimeoutFn } from './queue.js';
+import { runItemJob, reconcileInterruptedItems, cleanErrorReason, describeJobError, type TimeoutFn } from './queue.js';
 import { EnrichmentDisabledError } from '../skills/types.js';
 import { LLMTransportError } from '../llm/provider.js';
 
@@ -74,6 +74,41 @@ describe('item status lifecycle (Story 5.2)', () => {
     assert.equal(row?.status, 'error');
     assert.equal(row?.errorReason, 'could not reach the AI provider');
     assert.doesNotMatch(row?.errorReason ?? '', /secret-host|llm\.ts:1/, 'no raw error/stack leaked');
+  });
+
+  it('names malformed model output instead of "processing failed", and logs the real cause', async () => {
+    seedItem('syntax');
+    const logged: string[] = [];
+    await runItemJob(handle, {
+      itemId: 'syntax',
+      type: 'enrich',
+      timeoutMs: 60_000,
+      timeoutFn: neverFires,
+      logger: { error: (m) => logged.push(m) },
+      work: async () => {
+        JSON.parse('{"a":"1" "b"}');
+      },
+    });
+    const row = statusOf('syntax');
+    assert.equal(row?.status, 'error');
+    assert.equal(row?.errorReason, 'AI returned invalid output');
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], /item syntax \(enrich\) failed: SyntaxError: /);
+  });
+
+  it('maps validation errors to the same user-safe reason; unknown errors stay generic', () => {
+    assert.equal(cleanErrorReason(Object.assign(new Error('x'), { name: 'ZodError' })), 'AI returned invalid output');
+    assert.equal(cleanErrorReason(new Error('boom')), 'processing failed');
+  });
+
+  it('logs failure detail one-line, bounded and with credentials masked', () => {
+    const line = describeJobError(
+      new Error('request failed\nAuthorization: Bearer abcdef0123456789 api_key=sk-live-1234567890abcdef ' + 'x'.repeat(500)),
+    );
+    assert.doesNotMatch(line, /\n/);
+    assert.doesNotMatch(line, /abcdef0123456789|1234567890abcdef/);
+    assert.ok(line.length <= 330);
+    assert.match(line, /^Error: request failed/);
   });
 
   // AC 3 — EnrichmentDisabledError → done (NOT error)
