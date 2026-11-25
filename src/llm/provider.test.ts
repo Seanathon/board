@@ -44,3 +44,13 @@ describe('LLM typed errors (Story 4.1)', () => {
     assert.deepEqual(out, { a: 1 });
   });
 });
+
+describe('LLMSchemaError keeps the raw model output for failure evidence', () => {
+  const schema = z.object({ a: z.string() });
+  it('on non-JSON output', () => {
+    assert.throws(() => parseStructuredOutput('not json', schema), (e: LLMSchemaError) => e.rawOutput === 'not json');
+  });
+  it('on a schema violation', () => {
+    assert.throws(() => parseStructuredOutput('{"a":1}', schema), (e: LLMSchemaError) => e.rawOutput === '{"a":1}');
+  });
+});

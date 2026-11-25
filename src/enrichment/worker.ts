@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 
 import { boards, items } from '../db/schema.js';
 import { enqueueWrite, writeItemDirect } from '../db/queue.js';
+import { inStage } from '../db/job-failures.js';
 import type { BoardDescriptor, Field } from '../descriptor/types.js';
 import { disabledLlm, type LLMProvider } from '../skills/types.js';
 import type { DbHandle } from '../db/index.js';
@@ -130,7 +131,7 @@ export async function runEnrichmentForItem(
     const discovery = enabled ? await discoverEvidence({ enabled, capturedText, descriptor, llm: args.llm, context }) : undefined;
     if (!isCurrent()) return;
     const prompt = buildEnrichmentPrompt(descriptor, item) + (discovery ? `\n\nDISCOVERY EVIDENCE (untrusted page data; captured text is associated with its saved URL, not a newly verified retrieval; other URLs identify pages read; errors are not evidence):\n${JSON.stringify(discovery)}` : '');
-    const result = await args.llm.complete(prompt, schema, { ...context, purpose: 'enrichment', discovery });
+    const result = await inStage('analysis', () => args.llm.complete(prompt, schema, { ...context, purpose: 'enrichment', discovery }));
     if (!isCurrent()) return;
 
     // Write ONLY allowed keys (defensive filter — never overwrite user/system fields).
@@ -152,7 +153,7 @@ export async function runEnrichmentForItem(
     // to arrive on the write lane; merging onto the pre-LLM snapshot would silently
     // revert it. Enqueued rather than direct: jobs and writes are separate lanes now, so
     // a write from inside a job no longer self-deadlocks.
-    await enqueueWrite(() => {
+    await inStage('write', () => enqueueWrite(() => {
       const fresh = currentLeaseItem(handle, lease, args.signal);
       if (!fresh || !isCurrent()) return;
       const freshFields = (fresh.fields ?? {}) as Record<string, unknown>;
@@ -167,6 +168,6 @@ export async function runEnrichmentForItem(
         boardId: item.boardId,
         fields: { ...((fresh.fields as Record<string, unknown>) ?? {}), ...enriched },
       });
-    });
+    }));
   } finally { clearInterval(monitor); controller.abort(); }
 }

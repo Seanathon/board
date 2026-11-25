@@ -29,6 +29,7 @@ import { refetchItem, reenrichBoardItems } from "./enrichment/refetch.js";
 import { assignItems } from "./enrichment/assign.js";
 import { archiveFootprint } from "./db/archive-footprint.js";
 import { createRegistry, registerAllSkills, type SkillRegistry } from "./skills/registry.js";
+import { createFileFailureSink, setJobFailureSink } from "./db/job-failures.js";
 import { buildCtx, type JobQueue, type LLMProvider, type Logger } from "./skills/types.js";
 import { selectProvider, describeProvider } from "./llm/select-provider.js";
 import { disabledLlm } from "./skills/types.js";
@@ -319,6 +320,12 @@ export interface BuildServerOptions {
    * the 16.1 snapshot job on the single worker.
    */
   enqueueSnapshot?: (args: { itemId: string; url: string | null }) => void;
+  /**
+   * Directory for operator-side failure evidence (stage, scrubbed error, raw model
+   * output). Opt-in so hermetic tests never write to disk; the entrypoint passes
+   * `<DATA_DIR>/failures`.
+   */
+  failureDir?: string;
 }
 
 export async function buildServer(opts: BuildServerOptions = {}) {
@@ -329,6 +336,8 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   // don't materialize ./data).
   const screenshotsDir = opts.screenshotsDir ?? config.screenshotsDir;
   const snapshotsDir = opts.snapshotsDir ?? config.snapshotsDir;
+
+  if (opts.failureDir) setJobFailureSink(createFileFailureSink(opts.failureDir));
 
   const app = Fastify({ logger: false, bodyLimit: 20 * 1024 * 1024 });
 
@@ -951,7 +960,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   reconcileInterruptedItems(getDb());
   // Story 6.1: register capture adapters (6.2–6.4 populate the registry).
   registerAllCaptureAdapters(captureRegistry);
-  const app = await buildServer();
+  const app = await buildServer({ failureDir: path.join(config.dataDir, "failures") });
   // Story 2.4: bind is config-driven; default HOST (2.1) is 127.0.0.1 (secure
   // default — only an explicit non-empty HOST exposes it).
   const listenOpts = getListenOptions();

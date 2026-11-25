@@ -186,12 +186,12 @@ export class CliProvider implements LLMProvider {
         }
         parsed = extractAnalysisPayload(value);
       } catch (err) {
-        throw new LLMSchemaError('CLI agent output was not parseable JSON', { cause: err });
+        throw new LLMSchemaError('CLI agent output was not parseable JSON', { cause: err, rawOutput: raw });
       }
       const result = schema.safeParse(parsed);
       if (!result.success) {
         const detail = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-        throw new LLMSchemaError(`CLI agent output failed schema: ${detail}`, { cause: result.error });
+        throw new LLMSchemaError(`CLI agent output failed schema: ${detail}`, { cause: result.error, rawOutput: raw });
       }
       return result.data;
     } finally {

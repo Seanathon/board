@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { items } from '../db/schema.js';
 import { currentLeaseItem } from '../db/item-lease.js';
+import { inStage } from '../db/job-failures.js';
 import { runItemJob, type JobResult, type TimeoutFn } from '../db/queue.js';
 import { runCaptureForItem, type CaptureRegistry, type CaptureSource } from '../capture/adapter.js';
 import { runEnrichmentForItem } from './worker.js';
@@ -68,7 +69,7 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
       const current = currentLeaseItem(handle, lease, signal);
       if (!current || current.boardId !== args.boardId || (typeof args.source === 'string' && current.source !== args.source)) return;
       if (canCapture) {
-        await runCaptureForItem(handle, args.registry, {
+        await inStage('capture', () => runCaptureForItem(handle, args.registry, {
           itemId: args.itemId,
           boardId: args.boardId,
           source: args.source as CaptureSource,
@@ -76,7 +77,7 @@ export function runCaptureEnrichJob(handle: DbHandle, args: CaptureEnrichArgs): 
           lease,
           screenshotsDir: args.screenshotsDir,
           registerTeardown: (fn) => { captureTeardown = fn; },
-        });
+        }));
       }
       // Cheap tier (Inbox): skip the enrich hop entirely so llm.complete is never
       // reached — the AI takeaway is earned on assignment (Epic 14), not on capture.

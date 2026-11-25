@@ -1,4 +1,5 @@
 import { bindItemLease, beginItemLease, currentLeaseItem, invalidateItemLease, type ItemLease } from './item-lease.js';
+import { describeJobError, failureRawOutput, failureStage, reportJobFailure } from './job-failures.js';
 import { eq, sql } from 'drizzle-orm';
 
 import { assets, boards, items, type NewAsset, type NewItem } from './schema.js';
@@ -330,22 +331,7 @@ export function cleanErrorReason(err: unknown): string {
   return 'processing failed';
 }
 
-/**
- * Operator-facing description of a failure for the server log (NOT stored, NOT sent
- * to the UI): `Name: message`, one line, bounded, with obvious credentials masked.
- * `cleanErrorReason` deliberately discards this detail, which made failures
- * undiagnosable; the log is where it belongs.
- */
-export function describeJobError(err: unknown): string {
-  const name = (err as { name?: string })?.name || 'Error';
-  const message = String((err as Error)?.message ?? err)
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
-    .replace(/\b(sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{8,}/g, '$1-***')
-    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 ***')
-    .replace(/\b(api[_-]?key|token|secret|password|authorization)(["']?\s*[:=]\s*["']?)[^\s"',;]+/gi, '$1$2***')
-    .trim();
-  return `${name}: ${message.length > 300 ? `${message.slice(0, 300)}…` : message}`;
-}
+export { describeJobError };
 
 export interface RunItemJobArgs {
   itemId: string;
@@ -401,8 +387,23 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
         if (err instanceof EnrichmentDisabledError) {
           setItemStatusDirect(handle, args.itemId, 'done', null); // disabled = done, not error
         } else {
+          const reason = cleanErrorReason(err);
           (args.logger ?? console).error(`item ${args.itemId} (${args.type}) failed: ${describeJobError(err)}`);
-          setItemStatusDirect(handle, args.itemId, 'error', cleanErrorReason(err));
+          const described = describeJobError(err);
+          const split = described.indexOf(': ');
+          reportJobFailure(
+            {
+              at: new Date().toISOString(),
+              itemId: args.itemId,
+              jobType: args.type,
+              stage: failureStage(err),
+              name: described.slice(0, split),
+              message: described.slice(split + 2),
+              category: reason,
+            },
+            failureRawOutput(err),
+          );
+          setItemStatusDirect(handle, args.itemId, 'error', reason);
         }
         // swallowed: the terminal status is recorded; the job itself "succeeded" at
         // managing status.
@@ -422,7 +423,18 @@ export async function runItemJob(handle: DbHandle, args: RunItemJobArgs): Promis
   // terminal error status through the writer so the item is never stuck.
   if (result.timedOut) {
     await enqueueWrite(() => {
-      if (currentLeaseItem(handle, lease)) setItemStatusDirect(handle, args.itemId, 'error', 'timed out');
+      if (currentLeaseItem(handle, lease)) {
+        reportJobFailure({
+          at: new Date().toISOString(),
+          itemId: args.itemId,
+          jobType: args.type,
+          stage: 'timeout',
+          name: 'TimeoutError',
+          message: `job exceeded ${args.timeoutMs}ms`,
+          category: 'timed out',
+        });
+        setItemStatusDirect(handle, args.itemId, 'error', 'timed out');
+      }
     });
   }
   return result;
